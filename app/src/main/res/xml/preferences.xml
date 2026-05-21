@@ -15,6 +15,34 @@
             app:dialogTitle="Set Server Port"
             app:defaultValue="1935"
             app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:key="jpeg_quality"
+            app:title="JPEG Quality (10-100)"
+            app:dialogTitle="Set JPEG Quality"
+            app:defaultValue="75"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:key="stream_fps"
+            app:title="Frame Rate (FPS 5-60)"
+            app:dialogTitle="Set Frame Rate"
+            app:defaultValue="30"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:key="stream_latency_ms"
+            app:title="Frame Latency (ms 0-1000)"
+            app:dialogTitle="Set Target Latency"
+            app:defaultValue="33"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:key="stream_scale"
+            app:title="Resolution Scale (0.2-1.0)"
+            app:dialogTitle="Set Resolution Scale"
+            app:defaultValue="0.6"
+            app:useSimpleSummaryProvider="true" />
             
     </PreferenceCategory>
 
