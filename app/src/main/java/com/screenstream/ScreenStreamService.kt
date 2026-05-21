@@ -90,6 +90,17 @@ class ScreenStreamService : Service() {
     private val encodeInProgress = AtomicBoolean(false)
 
     private var lastFrame = 0L
+    private var fps = DEFAULT_FPS
+    private var jpegQuality = DEFAULT_QUALITY
+    private var frameLatencyMs = DEFAULT_FRAME_LATENCY_MS
+    private var frameIntervalMs = 1000L / DEFAULT_FPS
+    private var scale = DEFAULT_SCALE
+
+    private var audioEnabled = false
+    private var audioSource = "mic"
+    private var audioBitrateKbps = 128
+    private var audioSampleRate = 44100
+    private var audioStereo = true
 
     override fun onBind(intent: Intent?): IBinder? = null
 

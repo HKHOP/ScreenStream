@@ -46,4 +46,43 @@
             
     </PreferenceCategory>
 
+    <PreferenceCategory app:title="Audio Configuration">
+
+        <SwitchPreferenceCompat
+            app:key="enable_audio"
+            app:title="Enable Audio"
+            app:summary="Include audio track in streams when supported"
+            app:defaultValue="false" />
+
+        <ListPreference
+            app:key="audio_source"
+            app:title="Audio Source"
+            app:defaultValue="mic"
+            app:entries="@array/audio_source_entries"
+            app:entryValues="@array/audio_source_values"
+            app:useSimpleSummaryProvider="true" />
+
+        <EditTextPreference
+            app:key="audio_bitrate_kbps"
+            app:title="Audio Bitrate (kbps 32-320)"
+            app:dialogTitle="Set Audio Bitrate"
+            app:defaultValue="128"
+            app:useSimpleSummaryProvider="true" />
+
+        <ListPreference
+            app:key="audio_sample_rate"
+            app:title="Audio Sample Rate"
+            app:defaultValue="44100"
+            app:entries="@array/audio_sample_rate_entries"
+            app:entryValues="@array/audio_sample_rate_values"
+            app:useSimpleSummaryProvider="true" />
+
+        <SwitchPreferenceCompat
+            app:key="audio_stereo"
+            app:title="Stereo Audio"
+            app:summary="Enable dual-channel audio capture when supported"
+            app:defaultValue="true" />
+
+    </PreferenceCategory>
+
 </PreferenceScreen>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="audio_source_entries">
+        <item>Microphone</item>
+        <item>Playback (Android 10+)</item>
+    </string-array>
+
+    <string-array name="audio_source_values">
+        <item>mic</item>
+        <item>playback</item>
+    </string-array>
+
+    <string-array name="audio_sample_rate_entries">
+        <item>44100 Hz</item>
+        <item>48000 Hz</item>
+    </string-array>
+
+    <string-array name="audio_sample_rate_values">
+        <item>44100</item>
+        <item>48000</item>
+    </string-array>
+</resources>
