@@ -1,152 +1,99 @@
-package com.screenstream
+package com.hkhop.screenstream
 
-import android.util.Log
+import java.io.IOException
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * A simple HTTP MJPEG streaming server.
- *
- * Compatible with VLC, browsers (Chrome/Firefox), and any media player
- * that supports multipart/x-mixed-replace streams.
- *
- * Open URL in VLC:  http://<device-ip>:<port>
- * Open URL in browser: http://<device-ip>:<port>
- */
 class HttpMjpegServer(private val port: Int) {
 
-    companion object {
-        private const val TAG = "HttpMjpegServer"
-        private const val BOUNDARY = "mjpegstream"
-    }
-
     private var serverSocket: ServerSocket? = null
-    private val clients = CopyOnWriteArrayList<ClientOutput>()
-    private val running = AtomicBoolean(false)
-    private val executor = Executors.newCachedThreadPool()
-
-    // Listener for connection count updates
-    var onClientCountChanged: ((Int) -> Unit)? = null
-
-    data class ClientOutput(val stream: OutputStream, val socket: Socket)
+    private var isRunning = false
+    private val clientStreams = CopyOnWriteArrayList<OutputStream>()
+    private val serverExecutor = Executors.newCachedThreadPool()
 
     fun start() {
-        if (running.getAndSet(true)) return
-        executor.execute {
+        isRunning = true
+        serverExecutor.execute {
             try {
-                serverSocket = ServerSocket(port).also { it.reuseAddress = true }
-                Log.i(TAG, "MJPEG server started on port $port")
-                while (running.get()) {
-                    try {
-                        val socket = serverSocket!!.accept()
-                        executor.execute { handleClient(socket) }
-                    } catch (e: SocketException) {
-                        if (running.get()) Log.e(TAG, "Socket accept error: ${e.message}")
-                    }
+                serverSocket = ServerSocket(port)
+                while (isRunning) {
+                    val socket = serverSocket?.accept() ?: break
+                    serverExecutor.execute { handleClient(socket) }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Server failed to start: ${e.message}")
+            } catch (e: IOException) {
+                e.printStackTrace()
             }
         }
     }
 
     private fun handleClient(socket: Socket) {
         try {
-            socket.soTimeout = 5000
-            val input = socket.getInputStream()
+            val outputStream = socket.getOutputStream()
+            
+            // Standard HTTP MJPEG Header configuration
+            val header = ("HTTP/1.0 200 OK\r\n" +
+                    "Server: AndroidScreenStream\r\n" +
+                    "Connection: close\r\n" +
+                    "Max-Age: 0\r\n" +
+                    "Expires: 0\r\n" +
+                    "Cache-Control: no-cache, private, no-store, must-revalidate, max-age=0, post-check=0, pre-check=0\r\n" +
+                    "Pragma: no-cache\r\n" +
+                    "Content-Type: multipart/x-mixed-replace; boundary=--boundary\r\n\r\n").toByteArray()
+            
+            outputStream.write(header)
+            outputStream.flush()
 
-            // Drain the HTTP request headers
-            val buf = ByteArray(4096)
-            val read = input.read(buf)
-            if (read <= 0) { socket.close(); return }
+            // Register stream for global frame broadcast updates
+            clientStreams.add(outputStream)
 
-            val request = String(buf, 0, read)
-            Log.d(TAG, "Client connected from ${socket.inetAddress.hostAddress}")
-
-            // We don't care what path was requested — always stream
-            socket.soTimeout = 0
-
-            val out = socket.getOutputStream()
-            val response = buildString {
-                append("HTTP/1.0 200 OK\r\n")
-                append("Cache-Control: no-cache, no-store, must-revalidate\r\n")
-                append("Pragma: no-cache\r\n")
-                append("Connection: close\r\n")
-                append("Content-Type: multipart/x-mixed-replace; boundary=$BOUNDARY\r\n")
-                append("\r\n")
+            // Keep socket alive until client explicitly drops connection
+            val inputStream = socket.getInputStream()
+            val dummyBuffer = ByteArray(1024)
+            while (isRunning && inputStream.read(dummyBuffer) != -1) {
+                // Keep-alive loop reading client requests/headers
             }
-            out.write(response.toByteArray(Charsets.UTF_8))
-            out.flush()
-
-            val clientOut = ClientOutput(out, socket)
-            clients.add(clientOut)
-            onClientCountChanged?.invoke(clients.size)
-
-            // Block this thread until client disconnects
+        } catch (e: IOException) {
+            // Client closed stream connection
+        } finally {
             try {
-                while (running.get() && !socket.isClosed) {
-                    Thread.sleep(500)
-                }
-            } catch (_: InterruptedException) {}
-
-            clients.remove(clientOut)
-            onClientCountChanged?.invoke(clients.size)
-            socket.close()
-            Log.d(TAG, "Client disconnected. Active: ${clients.size}")
-
-        } catch (e: Exception) {
-            Log.d(TAG, "Client error: ${e.message}")
-            socket.runCatching { close() }
+                clientStreams.remove(socket.getOutputStream())
+                socket.close()
+            } catch (_: Exception) {}
         }
     }
 
-    /**
-     * Push a JPEG frame to all connected clients.
-     * Call this from your capture loop.
-     */
-    fun sendFrame(jpegData: ByteArray) {
-        if (!running.get() || clients.isEmpty()) return
+    fun broadcastFrame(jpegBytes: ByteArray) {
+        if (clientStreams.isEmpty()) return
 
-        val header = buildString {
-            append("--$BOUNDARY\r\n")
-            append("Content-Type: image/jpeg\r\n")
-            append("Content-Length: ${jpegData.size}\r\n")
-            append("\r\n")
-        }.toByteArray(Charsets.UTF_8)
+        // Multi-part formatting block
+        val frameHeader = ("--boundary\r\n" +
+                "Content-Type: image/jpeg\r\n" +
+                "Content-Length: ${jpegBytes.size}\r\n\r\n").toByteArray()
 
-        val footer = "\r\n".toByteArray(Charsets.UTF_8)
-
-        val dead = mutableListOf<ClientOutput>()
-        for (client in clients) {
+        for (stream in clientStreams) {
             try {
-                client.stream.write(header)
-                client.stream.write(jpegData)
-                client.stream.write(footer)
-                client.stream.flush()
-            } catch (e: Exception) {
-                dead.add(client)
+                stream.write(frameHeader)
+                stream.write(jpegBytes)
+                stream.write("\r\n".toByteArray())
+                stream.flush()
+            } catch (e: IOException) {
+                // Remove broken pipe connection safely
+                clientStreams.remove(stream)
             }
         }
-        if (dead.isNotEmpty()) {
-            dead.forEach { it.socket.runCatching { close() } }
-            clients.removeAll(dead.toSet())
-            onClientCountChanged?.invoke(clients.size)
-        }
     }
-
-    fun getClientCount(): Int = clients.size
 
     fun stop() {
-        running.set(false)
-        clients.forEach { it.socket.runCatching { close() } }
-        clients.clear()
-        serverSocket?.runCatching { close() }
-        serverSocket = null
-        Log.i(TAG, "MJPEG server stopped")
+        isRunning = false
+        try {
+            serverSocket?.close()
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+        clientStreams.clear()
+        serverExecutor.shutdownNow()
     }
 }
