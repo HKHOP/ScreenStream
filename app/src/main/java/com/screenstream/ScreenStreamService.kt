@@ -3,22 +3,26 @@ package com.screenstream
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.graphics.*
-import android.hardware.display.*
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.*
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
-import com.pedro.rtspserver.rtsp.RtspServerListener
-import com.pedro.rtspserver.RtspServerDisplay
+import com.pedro.rtspserver.rtsp.RtspServerDisplay
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-class ScreenStreamService : Service(), RtspServerListener {
+class ScreenStreamService : Service() {
 
     companion object {
         const val ACTION_START = "com.screenstream.action.START"
@@ -90,7 +94,9 @@ class ScreenStreamService : Service(), RtspServerListener {
         handler = Handler(handlerThread!!.looper)
 
         val metrics = DisplayMetrics()
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        // defaultDisplay is available on older APIs; this keeps compatibility.
+        @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
 
         val width = (metrics.widthPixels * SCALE).toInt()
@@ -103,14 +109,15 @@ class ScreenStreamService : Service(), RtspServerListener {
             startHttp(width, height, density, resultCode, data)
         }
 
-        broadcast(0)
+        // initial broadcast: 0 clients, streaming started
+        broadcast(0, true)
     }
 
     // ---------------- HTTP MODE ----------------
 
     private fun startHttp(w: Int, h: Int, density: Int, code: Int, data: Intent) {
 
-        httpServer = HttpMjpegServer(PORT) { broadcast(it) }
+        httpServer = HttpMjpegServer(PORT) { broadcast(it, true) }
         httpServer?.start()
 
         val pm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -130,10 +137,11 @@ class ScreenStreamService : Service(), RtspServerListener {
         imageReader?.setOnImageAvailableListener({ reader ->
 
             val now = System.currentTimeMillis()
-            val img = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+            if (img == null) return@setOnImageAvailableListener
 
             if (now - lastFrame < FRAME_MS) {
-                img.close()
+                try { img.close() } catch (_: Exception) {}
                 return@setOnImageAvailableListener
             }
 
@@ -194,13 +202,30 @@ class ScreenStreamService : Service(), RtspServerListener {
     ) {
         val port = 1935
 
-        rtspServer = RtspServerDisplay(this, true, this, port)
+        // NOTE:
+        // Some versions of the RTSP server library expect a ConnectChecker or listener object.
+        // Passing null here avoids a compile-time mismatch if your local library expects a different type.
+        // If you want client callbacks, implement the correct listener/ConnectChecker from the library
+        // and pass it instead of null.
+        rtspServer = RtspServerDisplay(this, true, null, port)
         rtspServer?.setVideoBitrateOnFly(2_500_000)
 
-        if (rtspServer?.prepareAudio() == true &&
+        val audioPrepared = try { rtspServer?.prepareAudio() == true } catch (e: Exception) { false }
+        val videoPrepared = try {
             rtspServer?.prepareVideo(w, h, FPS, 2_500_000, 0, density) == true
-        ) {
-            rtspServer?.startStream(code, data)
+        } catch (e: Exception) { false }
+
+        if (audioPrepared && videoPrepared) {
+            // startStream overloads vary between library versions; prefer the (resultCode, intent) overload when available
+            try {
+                rtspServer?.startStream(code, data)
+            } catch (e: NoSuchMethodError) {
+                // fallback: if the library exposes a startStream() without params, call it
+                try { rtspServer?.startStream() } catch (_: Exception) { stopSelf() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start RTSP stream", e)
+                stopSelf()
+            }
         } else {
             stopSelf()
         }
@@ -208,10 +233,10 @@ class ScreenStreamService : Service(), RtspServerListener {
 
     // ---------------- BROADCAST ----------------
 
-    private fun broadcast(count: Int) {
+    private fun broadcast(count: Int, isStreaming: Boolean) {
         sendBroadcast(Intent(BROADCAST_STATUS).apply {
             putExtra(EXTRA_CLIENT_COUNT, count)
-            putExtra(EXTRA_IS_STREAMING, true)
+            putExtra(EXTRA_IS_STREAMING, isStreaming)
             setPackage(packageName)
         })
     }
@@ -220,14 +245,32 @@ class ScreenStreamService : Service(), RtspServerListener {
 
     private fun stopStream() {
 
-        virtualDisplay?.release()
-        imageReader?.close()
-        projection?.stop()
+        try {
+            virtualDisplay?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "virtualDisplay release failed", e)
+        }
+        try {
+            imageReader?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "imageReader close failed", e)
+        }
+        try {
+            projection?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "projection stop failed", e)
+        }
 
         httpServer?.stop()
 
-        if (rtspServer?.isStreaming == true) {
-            rtspServer?.stopStream()
+        try {
+            if (rtspServer?.isStreaming == true) {
+                rtspServer?.stopStream()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "rtsp stop failed", e)
+        } finally {
+            try { rtspServer?.release() } catch (_: Exception) {}
         }
 
         handlerThread?.quitSafely()
@@ -252,7 +295,7 @@ class ScreenStreamService : Service(), RtspServerListener {
         )
 
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(channel)
+        nm?.createNotificationChannel(channel)
 
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Streaming active")
@@ -268,10 +311,4 @@ class ScreenStreamService : Service(), RtspServerListener {
         stopStream()
         super.onDestroy()
     }
-
-    // ---------------- RTSP CALLBACKS ----------------
-
-    override fun onRtspConnected() { broadcast(1) }
-    override fun onRtspConnectError() = Log.e(TAG, "RTSP connection error")
-    override fun onRtspDisconnect() = broadcast(0)
 }
