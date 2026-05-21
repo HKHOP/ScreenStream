@@ -190,22 +190,8 @@ class ReflectiveRtspEngine private constructor(
             } ?: return null
 
             return try {
-                val ctor = clazz.constructors.firstOrNull { it.parameterTypes.isNotEmpty() }
-                val instance = if (ctor != null) {
-                    val params = ctor.parameterTypes.map { paramType ->
-                        when {
-                            paramType == java.lang.Boolean.TYPE -> java.lang.Boolean.FALSE
-                            paramType == java.lang.Integer.TYPE -> Integer.valueOf(port)
-                            paramType == java.lang.Integer::class.java -> Integer.valueOf(port)
-                            paramType == java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
-                            paramType.isAssignableFrom(Context::class.java) -> context
-                            else -> null
-                        }
-                    }.toTypedArray()
-                    ctor.newInstance(*params)
-                } else {
-                    clazz.getDeclaredConstructor().newInstance()
-                }
+                val instance = instantiateBestEffort(clazz, context, port)
+                    ?: return null
 
                 try {
                     val setPort = clazz.getMethod("setPort", Integer.TYPE)
@@ -216,6 +202,45 @@ class ReflectiveRtspEngine private constructor(
                 ReflectiveRtspEngine(instance, clazz)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to instantiate RTSP server reflectively", e)
+                null
+            }
+        }
+
+        private fun instantiateBestEffort(clazz: Class<*>, context: Context, port: Int): Any? {
+            val constructors = clazz.constructors.sortedByDescending { ctor ->
+                // Prefer constructors that explicitly require Context; this is typically the valid
+                // entry point for the RTSP server classes on Android.
+                if (ctor.parameterTypes.any { Context::class.java.isAssignableFrom(it) }) 2 else 1
+            }
+
+            constructors.forEach { ctor ->
+                val args = ArrayList<Any>(ctor.parameterCount)
+                var valid = true
+                ctor.parameterTypes.forEach { paramType ->
+                    val arg: Any? = when {
+                        Context::class.java.isAssignableFrom(paramType) -> context
+                        paramType == Integer.TYPE || paramType == java.lang.Integer::class.java -> Integer.valueOf(port)
+                        paramType == java.lang.Boolean.TYPE || paramType == java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
+                        else -> null
+                    }
+                    if (arg == null) {
+                        valid = false
+                    } else {
+                        args.add(arg)
+                    }
+                }
+                if (!valid) return@forEach
+                try {
+                    return ctor.newInstance(*args.toTypedArray())
+                } catch (e: Exception) {
+                    Log.w(TAG, "Constructor invocation failed for ${clazz.simpleName}", e)
+                }
+            }
+
+            return try {
+                clazz.getDeclaredConstructor().newInstance()
+            } catch (e: Exception) {
+                Log.e(TAG, "No compatible constructor found for ${clazz.name}", e)
                 null
             }
         }
