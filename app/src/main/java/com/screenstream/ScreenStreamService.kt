@@ -56,10 +56,10 @@ class ScreenStreamService : Service() {
         const val PORT = 8080
 
         private const val TAG = "ScreenStreamService"
-        private const val SCALE = 0.6f
-        private const val FPS = 30
-        private const val FRAME_MS = 1000 / FPS
-        private const val QUALITY = 75
+        private const val DEFAULT_SCALE = 0.6f
+        private const val DEFAULT_FPS = 30
+        private const val DEFAULT_FRAME_LATENCY_MS = 33L
+        private const val DEFAULT_QUALITY = 75
 
         private const val NOTIF_ID = 101
         private const val CHANNEL_ID = "screen_stream"
@@ -126,8 +126,8 @@ class ScreenStreamService : Service() {
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
 
-        val width = (metrics.widthPixels * SCALE).toInt()
-        val height = (metrics.heightPixels * SCALE).toInt()
+        val width = (metrics.widthPixels * scale).toInt().coerceAtLeast(1)
+        val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(1)
         val density = metrics.densityDpi
 
         if (rtspMode) {
@@ -173,7 +173,8 @@ class ScreenStreamService : Service() {
             val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
             if (img == null) return@setOnImageAvailableListener
 
-            if (now - lastFrame < FRAME_MS) {
+            val minFrameDelta = maxOf(frameIntervalMs, frameLatencyMs)
+            if (now - lastFrame < minFrameDelta) {
                 try { img.close() } catch (_: Exception) {}
                 return@setOnImageAvailableListener
             }
@@ -208,7 +209,7 @@ class ScreenStreamService : Service() {
                             Bitmap.createBitmap(src, 0, 0, w, h)
                         else src
 
-                        frame.compress(Bitmap.CompressFormat.JPEG, QUALITY, bufferStream)
+                        frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
 
                         httpServer?.broadcastFrame(bufferStream.toByteArray())
 
@@ -235,16 +236,19 @@ class ScreenStreamService : Service() {
     ) {
         // The project originally used com.pedro.rtspserver.RtspServerDisplay.
         // To keep this file compilable when that library is not present, we check for the class.
-        val rtspClassName = "com.pedro.rtspserver.RtspServerDisplay"
-        val clazz = try {
-            Class.forName(rtspClassName)
-        } catch (e: ClassNotFoundException) {
+        val classCandidates = listOf(
+            "com.pedro.rtspserver.RtspServerDisplay",
+            "com.pedro.library.rtsp.rtspserver.RtspServerDisplay"
+        )
+        val clazz = classCandidates.firstNotNullOfOrNull { className ->
+            try {
+                Class.forName(className)
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (clazz == null) {
             Log.w(TAG, "RTSP library not found on classpath; RTSP mode unavailable")
-            // Stop the service because RTSP mode was requested but library is missing.
-            stopSelf()
-            return
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking RTSP class", e)
             stopSelf()
             return
         }
@@ -307,7 +311,7 @@ class ScreenStreamService : Service() {
                     Integer.TYPE,
                     Integer.TYPE
                 )
-                (m.invoke(rtspServer, w, h, FPS, 2_500_000, 0, density) as? Boolean) == true
+                (m.invoke(rtspServer, w, h, fps, 2_500_000, 0, density) as? Boolean) == true
             } catch (e: NoSuchMethodException) {
                 // try alternative signature: prepareVideo(width, height, fps, bitrate, rotation)
                 try {
@@ -319,7 +323,7 @@ class ScreenStreamService : Service() {
                         Integer.TYPE,
                         Integer.TYPE
                     )
-                    (m2.invoke(rtspServer, w, h, FPS, 2_500_000, 0) as? Boolean) == true
+                    (m2.invoke(rtspServer, w, h, fps, 2_500_000, 0) as? Boolean) == true
                 } catch (ex: Exception) {
                     Log.w(TAG, "prepareVideo not available or failed", ex)
                     false
@@ -329,7 +333,10 @@ class ScreenStreamService : Service() {
                 false
             }
 
-            if (audioPrepared && videoPrepared) {
+            if (videoPrepared) {
+                if (!audioPrepared) {
+                    Log.w(TAG, "RTSP audio was not prepared; continuing with video-only stream")
+                }
                 // Try to call startStream(resultCode, intent) or startStream()
                 try {
                     val startWithParams = clazz.getMethod("startStream", Integer.TYPE, Intent::class.java)
@@ -346,8 +353,23 @@ class ScreenStreamService : Service() {
                     Log.e(TAG, "Failed to start RTSP stream", e)
                     stopSelf()
                 }
+
+                // Verify server actually entered streaming state when API supports isStreaming().
+                val started = try {
+                    val isStreamingMethod = clazz.getMethod("isStreaming")
+                    (isStreamingMethod.invoke(rtspServer) as? Boolean) == true
+                } catch (_: Exception) {
+                    true
+                }
+
+                if (!started) {
+                    Log.e(TAG, "RTSP stream start was invoked but server is not streaming")
+                    setStreamingState(false)
+                    broadcast(0, false)
+                    stopSelf()
+                }
             } else {
-                Log.e(TAG, "RTSP prepareAudio/prepareVideo failed")
+                Log.e(TAG, "RTSP prepareVideo failed")
                 stopSelf()
             }
         } catch (e: Exception) {
