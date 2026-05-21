@@ -54,10 +54,10 @@ class ReflectiveRtspEngine private constructor(
 
         // Try known/likely signatures first, then fallback to any compatible prepareAudio overload.
         val signatureCandidates = listOf(
-            arrayOf(Integer.TYPE, Integer.TYPE, java.lang.Boolean.TYPE),
-            arrayOf(Integer.TYPE, Integer.TYPE, Integer.TYPE),
-            arrayOf(Integer.TYPE, Integer.TYPE),
-            arrayOf(Integer.TYPE),
+            arrayOf<Class<*>>(Integer.TYPE, Integer.TYPE, java.lang.Boolean.TYPE),
+            arrayOf<Class<*>>(Integer.TYPE, Integer.TYPE, Integer.TYPE),
+            arrayOf<Class<*>>(Integer.TYPE, Integer.TYPE),
+            arrayOf<Class<*>>(Integer.TYPE),
             emptyArray<Class<*>>()
         )
 
