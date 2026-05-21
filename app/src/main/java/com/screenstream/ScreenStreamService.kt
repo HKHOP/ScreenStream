@@ -51,6 +51,7 @@ class ScreenStreamService : Service() {
         const val BROADCAST_STATUS = "com.screenstream.BROADCAST_STATUS"
         const val EXTRA_CLIENT_COUNT = "CLIENT_COUNT"
         const val EXTRA_IS_STREAMING = "IS_STREAMING"
+        private const val PREF_IS_STREAMING = "pref_is_streaming"
 
         const val PORT = 8080
 
@@ -72,6 +73,7 @@ class ScreenStreamService : Service() {
     private var httpServer: HttpMjpegServer? = null
     private var rtspServer: Any? = null
     private var rtspMode = false
+    private var rtspPort = 1935
 
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
@@ -105,6 +107,7 @@ class ScreenStreamService : Service() {
 
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         rtspMode = prefs.getBoolean("use_rtsp_mode", false)
+        rtspPort = prefs.getString("rtsp_port", "1935")?.toIntOrNull() ?: 1935
 
         createNotification()
 
@@ -134,6 +137,7 @@ class ScreenStreamService : Service() {
         }
 
         // initial broadcast: 0 clients, streaming started
+        setStreamingState(true)
         broadcast(0, true)
     }
 
@@ -255,8 +259,8 @@ class ScreenStreamService : Service() {
                 val params = ctor.parameterTypes.map { paramType ->
                     when {
                         paramType == java.lang.Boolean.TYPE -> java.lang.Boolean.FALSE
-                        paramType == java.lang.Integer.TYPE -> Integer.valueOf(1935)
-                        paramType == java.lang.Integer::class.java -> Integer.valueOf(1935)
+                        paramType == java.lang.Integer.TYPE -> Integer.valueOf(rtspPort)
+                        paramType == java.lang.Integer::class.java -> Integer.valueOf(rtspPort)
                         paramType == java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
                         paramType.isAssignableFrom(Context::class.java) -> this
                         else -> null
@@ -269,6 +273,13 @@ class ScreenStreamService : Service() {
                 clazz.getDeclaredConstructor().newInstance()
             }
             rtspServer = instance
+
+            try {
+                val setPort = clazz.getMethod("setPort", Integer.TYPE)
+                setPort.invoke(rtspServer, Integer.valueOf(rtspPort))
+            } catch (_: Exception) {
+                // ignore if method is absent
+            }
 
             // setVideoBitrateOnFly(int) if available
             try {
@@ -416,6 +427,7 @@ class ScreenStreamService : Service() {
             // ignore on older APIs
         }
         stopSelf()
+        setStreamingState(false)
 
         sendBroadcast(Intent(BROADCAST_STATUS).apply {
             putExtra(EXTRA_CLIENT_COUNT, 0)
@@ -449,5 +461,12 @@ class ScreenStreamService : Service() {
     override fun onDestroy() {
         stopStream()
         super.onDestroy()
+    }
+
+    private fun setStreamingState(streaming: Boolean) {
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .edit()
+            .putBoolean(PREF_IS_STREAMING, streaming)
+            .apply()
     }
 }

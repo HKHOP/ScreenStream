@@ -17,6 +17,9 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 class MainActivity : AppCompatActivity() {
+    companion object {
+        private const val PREF_IS_STREAMING = "pref_is_streaming"
+    }
 
     private lateinit var tvStatus: TextView
     private lateinit var tvUrl: TextView
@@ -32,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val count = intent?.getIntExtra(ScreenStreamService.EXTRA_CLIENT_COUNT, 0) ?: 0
+            val streaming = intent?.getBooleanExtra(ScreenStreamService.EXTRA_IS_STREAMING, false) ?: false
+            if (streaming) showStreaming() else showIdle()
             updateClientCount(count)
         }
     }
@@ -85,6 +90,7 @@ class MainActivity : AppCompatActivity() {
             IntentFilter(ScreenStreamService.BROADCAST_STATUS),
             RECEIVER_NOT_EXPORTED
         )
+        syncUiWithServiceState()
     }
 
     override fun onStop() {
@@ -124,15 +130,14 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
         }
 
-        showStreaming()
+        // Wait for service broadcast to confirm actual state.
     }
 
     private fun stopStreaming() {
         startService(Intent(this, ScreenStreamService::class.java).apply {
             action = ScreenStreamService.ACTION_STOP
         })
-
-        showIdle()
+        // Wait for service broadcast to confirm actual state.
     }
 
     private fun showStreaming() {
@@ -176,6 +181,12 @@ class MainActivity : AppCompatActivity() {
         } else {
             "http://$ip:${ScreenStreamService.PORT}"
         }
+    }
+
+    private fun syncUiWithServiceState() {
+        val streaming = PreferenceManager.getDefaultSharedPreferences(this)
+            .getBoolean(PREF_IS_STREAMING, false)
+        if (streaming) showStreaming() else showIdle()
     }
 
     private fun getLocalIp(): String {
