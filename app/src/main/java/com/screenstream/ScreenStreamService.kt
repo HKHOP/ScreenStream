@@ -25,6 +25,7 @@ import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * ScreenStreamService
@@ -74,13 +75,19 @@ class ScreenStreamService : Service() {
     private var rtspServer: Any? = null
     private var rtspMode = false
     private var rtspPort = 1935
+    private var scale = DEFAULT_SCALE
+    private var fps = DEFAULT_FPS
+    private var frameIntervalMs = 1000L / DEFAULT_FPS
+    private var frameLatencyMs = DEFAULT_FRAME_LATENCY_MS
+    private var jpegQuality = DEFAULT_QUALITY
 
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
     private val executor = Executors.newSingleThreadExecutor()
 
     private var bitmap: Bitmap? = null
-    private val bufferStream = ByteArrayOutputStream(512 * 1024)
+    private val bufferStream = FastByteArrayOutputStream(512 * 1024)
+    private val encodeInProgress = AtomicBoolean(false)
 
     private var lastFrame = 0L
     private var fps = DEFAULT_FPS
@@ -119,27 +126,20 @@ class ScreenStreamService : Service() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         rtspMode = prefs.getBoolean("use_rtsp_mode", false)
         rtspPort = prefs.getString("rtsp_port", "1935")?.toIntOrNull() ?: 1935
-        fps = (prefs.getString("stream_fps", DEFAULT_FPS.toString())?.toIntOrNull() ?: DEFAULT_FPS)
-            .coerceIn(5, 60)
-        jpegQuality = (prefs.getString("jpeg_quality", DEFAULT_QUALITY.toString())?.toIntOrNull()
-            ?: DEFAULT_QUALITY).coerceIn(10, 100)
-        frameLatencyMs = (prefs.getString("stream_latency_ms", DEFAULT_FRAME_LATENCY_MS.toString())
-            ?.toLongOrNull() ?: DEFAULT_FRAME_LATENCY_MS).coerceIn(0L, 1000L)
-        scale = (prefs.getString("stream_scale", DEFAULT_SCALE.toString())?.toFloatOrNull()
-            ?: DEFAULT_SCALE).coerceIn(0.2f, 1.0f)
-        frameIntervalMs = (1000L / fps).coerceAtLeast(1L)
+        val configuredScale = prefs.getString("stream_scale", "0.6")?.toFloatOrNull()?.coerceIn(0.2f, 1.0f)
+            ?: DEFAULT_SCALE
+        val configuredFps = prefs.getString("stream_fps", DEFAULT_FPS.toString())?.toIntOrNull()?.coerceIn(5, 60)
+            ?: DEFAULT_FPS
+        val configuredLatencyMs = prefs.getString("stream_latency_ms", "33")?.toLongOrNull()?.coerceIn(0L, 1000L)
+            ?: DEFAULT_FRAME_LATENCY_MS
+        val configuredJpegQuality = prefs.getString("jpeg_quality", DEFAULT_QUALITY.toString())?.toIntOrNull()?.coerceIn(10, 100)
+            ?: DEFAULT_QUALITY
 
-        audioEnabled = prefs.getBoolean("enable_audio", false)
-        audioSource = prefs.getString("audio_source", "mic")
-            ?.takeIf { it == "mic" || it == "playback" } ?: "mic"
-        if (audioSource == "playback" && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            audioSource = "mic"
-        }
-        audioBitrateKbps = (prefs.getString("audio_bitrate_kbps", "128")?.toIntOrNull() ?: 128)
-            .coerceIn(32, 320)
-        audioSampleRate = (prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100)
-            .let { if (it == 48000) 48000 else 44100 }
-        audioStereo = prefs.getBoolean("audio_stereo", true)
+        scale = configuredScale
+        fps = configuredFps
+        frameIntervalMs = (1000L / configuredFps).coerceAtLeast(1L)
+        frameLatencyMs = configuredLatencyMs
+        jpegQuality = configuredJpegQuality
 
         createNotification()
 
@@ -201,6 +201,12 @@ class ScreenStreamService : Service() {
 
         imageReader?.setOnImageAvailableListener({ reader ->
 
+            if (httpServer?.hasClients() != true) {
+                val stale = try { reader.acquireLatestImage() } catch (_: Exception) { null }
+                stale?.close()
+                return@setOnImageAvailableListener
+            }
+
             val now = System.currentTimeMillis()
             val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
             if (img == null) return@setOnImageAvailableListener
@@ -232,20 +238,29 @@ class ScreenStreamService : Service() {
 
                 val src = bitmap ?: return@setOnImageAvailableListener
 
+                if (!encodeInProgress.compareAndSet(false, true)) {
+                    return@setOnImageAvailableListener
+                }
+
                 executor.execute {
-                    synchronized(bufferStream) {
+                    try {
+                        synchronized(bufferStream) {
 
-                        bufferStream.reset()
+                            bufferStream.reset()
 
-                        val frame = if (padding > 0)
-                            Bitmap.createBitmap(src, 0, 0, w, h)
-                        else src
+                            val frame = if (padding > 0)
+                                Bitmap.createBitmap(src, 0, 0, w, h)
+                            else src
 
+                            frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
                         frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
 
-                        httpServer?.broadcastFrame(bufferStream.toByteArray())
+                            httpServer?.broadcastFrame(bufferStream.rawBuffer(), bufferStream.size())
 
-                        if (frame !== src) frame.recycle()
+                            if (frame !== src) frame.recycle()
+                        }
+                    } finally {
+                        encodeInProgress.set(false)
                     }
                 }
 
@@ -522,5 +537,9 @@ class ScreenStreamService : Service() {
             .edit()
             .putBoolean(PREF_IS_STREAMING, streaming)
             .apply()
+    }
+
+    private class FastByteArrayOutputStream(size: Int) : ByteArrayOutputStream(size) {
+        fun rawBuffer(): ByteArray = buf
     }
 }
