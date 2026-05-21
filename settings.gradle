@@ -10,7 +10,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Adds the JitPack repository so Gradle can find and download the RTSP engine
+        maven { url 'https://jitpack.io' }
     }
 }
+
 rootProject.name = "ScreenStream"
 include ':app'
