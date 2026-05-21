@@ -3,7 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch:   # lets you trigger it manually from the GitHub website too
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,13 +18,14 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Grant execute permission to gradlew
-        run: chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
