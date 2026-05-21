@@ -2,11 +2,13 @@
 package com.screenstream
 
 import android.app.Activity
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -93,11 +95,6 @@ class ScreenStreamService : Service() {
     private val encodeInProgress = AtomicBoolean(false)
 
     private var lastFrame = 0L
-    private var fps = DEFAULT_FPS
-    private var jpegQuality = DEFAULT_QUALITY
-    private var frameLatencyMs = DEFAULT_FRAME_LATENCY_MS
-    private var frameIntervalMs = 1000L / DEFAULT_FPS
-    private var scale = DEFAULT_SCALE
 
     private var audioEnabled = false
     private var audioActive = false
@@ -106,6 +103,7 @@ class ScreenStreamService : Service() {
     private var audioSampleRate = 44100
     private var audioStereo = true
     private var audioRequired = false
+    private var audioDisabledByPolicy = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -151,10 +149,39 @@ class ScreenStreamService : Service() {
         audioSampleRate = prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100
         audioStereo = prefs.getBoolean("audio_stereo", true)
         audioRequired = prefs.getBoolean("audio_required", false)
+        audioDisabledByPolicy = false
         audioActive = rtspMode && audioEnabled
+
+        val sourceNeedsMic = audioSource == "mic"
+        val sourceIsPlayback = audioSource == "playback"
+        val playbackSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val hasRecordAudioPermission =
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
         if (audioEnabled && !rtspMode) {
             Log.w(TAG, "Audio requested but MJPEG mode is video-only. Ignoring audio until RTSP mode is enabled.")
+            audioActive = false
+        }
+        if (audioEnabled && rtspMode && sourceIsPlayback && !playbackSupported) {
+            Log.w(TAG, "Playback capture requested but unsupported on API ${Build.VERSION.SDK_INT}.")
+            if (audioRequired) {
+                setStreamingState(false)
+                broadcast(0, false)
+                stopSelf()
+                return
+            }
+            audioDisabledByPolicy = true
+            audioActive = false
+        }
+        if (audioEnabled && rtspMode && sourceNeedsMic && !hasRecordAudioPermission) {
+            Log.w(TAG, "Mic capture requested but RECORD_AUDIO permission denied.")
+            if (audioRequired) {
+                setStreamingState(false)
+                broadcast(0, false)
+                stopSelf()
+                return
+            }
+            audioDisabledByPolicy = true
             audioActive = false
         }
 
@@ -319,8 +346,14 @@ class ScreenStreamService : Service() {
             return false
         }
 
-        val audioPrepared = if (audioEnabled) {
-            rtspEngine?.configureAudio(audioBitrateKbps, audioSampleRate, audioStereo) == true
+        val audioPrepared = if (audioEnabled && !audioDisabledByPolicy) {
+            val sourceConfigured = rtspEngine?.configureAudioSource(audioSource) == true
+            if (!sourceConfigured) {
+                Log.w(TAG, "RTSP audio source '$audioSource' is not supported by this RTSP backend.")
+                false
+            } else {
+                rtspEngine?.configureAudio(audioBitrateKbps, audioSampleRate, audioStereo) == true
+            }
         } else {
             false
         }

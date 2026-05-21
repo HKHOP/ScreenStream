@@ -58,6 +58,14 @@ class MainActivity : AppCompatActivity() {
 
     private val notifPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val audioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+            } else {
+                showIdle()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,7 +128,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCaptureFlow() {
+        if (requiresMicPermissionForCurrentSettings() &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+    }
+
+    private fun requiresMicPermissionForCurrentSettings(): Boolean {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val rtsp = prefs.getBoolean("use_rtsp_mode", false)
+        val audioEnabled = prefs.getBoolean("enable_audio", false)
+        val audioSource = prefs.getString("audio_source", "mic") ?: "mic"
+        return rtsp && audioEnabled && audioSource == "mic"
     }
 
     private fun startStreamingService(resultCode: Int, data: Intent) {
