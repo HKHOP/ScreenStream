@@ -74,11 +74,6 @@ class ScreenStreamService : Service() {
     private var rtspServer: Any? = null
     private var rtspMode = false
     private var rtspPort = 1935
-    private var scale = DEFAULT_SCALE
-    private var fps = DEFAULT_FPS
-    private var frameIntervalMs = 1000L / DEFAULT_FPS
-    private var frameLatencyMs = DEFAULT_FRAME_LATENCY_MS
-    private var jpegQuality = DEFAULT_QUALITY
 
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
@@ -113,13 +108,6 @@ class ScreenStreamService : Service() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         rtspMode = prefs.getBoolean("use_rtsp_mode", false)
         rtspPort = prefs.getString("rtsp_port", "1935")?.toIntOrNull() ?: 1935
-        scale = prefs.getString("stream_scale", "0.6")?.toFloatOrNull()?.coerceIn(0.2f, 1.0f) ?: DEFAULT_SCALE
-        fps = prefs.getString("stream_fps", DEFAULT_FPS.toString())?.toIntOrNull()?.coerceIn(5, 60) ?: DEFAULT_FPS
-        frameIntervalMs = (1000L / fps).coerceAtLeast(1L)
-        frameLatencyMs = prefs.getString("stream_latency_ms", "33")?.toLongOrNull()?.coerceIn(0L, 1000L)
-            ?: DEFAULT_FRAME_LATENCY_MS
-        jpegQuality = prefs.getString("jpeg_quality", DEFAULT_QUALITY.toString())?.toIntOrNull()?.coerceIn(10, 100)
-            ?: DEFAULT_QUALITY
 
         createNotification()
 
