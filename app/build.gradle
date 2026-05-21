@@ -41,8 +41,8 @@ dependencies {
     // Preferences UI Architecture Support
     implementation 'androidx.preference:preference:1.2.1'
     
-    // Local RTSP Server Engine for Android Screen Capture
-    implementation 'com.github.pedroSG94:rtsp-server-android:1.0.3'
+    // CORRECTED: Local RTSP Server Engine module from the main public repository
+    implementation 'com.github.pedroSG94.rtmp-rtsp-stream-client-java:rtspserver:2.4.7'
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
