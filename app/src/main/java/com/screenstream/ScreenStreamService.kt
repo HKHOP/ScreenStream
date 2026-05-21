@@ -1,4 +1,4 @@
-package com.screenstream
+package com.hkhop.screenstream
 
 import android.app.*
 import android.content.Context
@@ -10,30 +10,177 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.*
-import android.util.Log
-import android.view.WindowManager
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
-/**
- * Foreground service that:
- *  1. Holds the MediaProjection session
- *  2. Creates a VirtualDisplay to mirror the screen into an ImageReader
- *  3. Encodes frames as JPEG and feeds them to the HTTP MJPEG server
- */
 class ScreenStreamService : Service() {
 
     companion object {
-        const val ACTION_START = "com.screenstream.START"
-        const val ACTION_STOP  = "com.screenstream.STOP"
-        const val EXTRA_RESULT_CODE = "resultCode"
-        const val EXTRA_PROJECTION_DATA = "projectionData"
+        const val ACTION_START = "START"
+        const val ACTION_STOP = "STOP"
+        const val EXTRA_RESULT_CODE = "RESULT_CODE"
+        const val EXTRA_RESULT_DATA = "RESULT_DATA"
 
-        const val PORT = 8080
+        // Configurable Parameters
+        private const val PORT = 8080
+        private const val SCALE = 0.7f // Balanced resolution scale
+        private const val JPEG_QUALITY = 70 // High clarity, lower bandwidth
+        private const val TARGET_FPS = 30
+        private const val FRAME_INTERVAL_MS = 1000 / TARGET_FPS
+        private const val NOTIFICATION_ID = 101
+        private const val CHANNEL_ID = "ScreenStreamChannel"
+    }
 
-        // Broadcast sent to MainActivity with status updates
-        const val BROADCAST_STATUS = "com.screenstream.STATUS"
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
+    private var server: HttpMjpegServer? = null
+    
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+    private val networkExecutor = Executors.newSingleThreadExecutor()
+
+    // Reusable objects to prevent continuous GC allocation thrashing
+    private var reusableBitmap: Bitmap? = null
+    private val jpegCompressionBuffer = ByteArrayOutputStream(1024 * 500) // Pre-allocated 500KB buffer
+    private var lastFrameTime = 0L
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_START -> {
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+                val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
+                if (resultData != null) {
+                    startStreaming(resultCode, resultData)
+                }
+            }
+            ACTION_STOP -> stopStreaming()
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun startStreaming(resultCode: Int, resultData: Intent) {
+        createNotificationChannel()
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("ScreenStream Active")
+            .setContentText("Streaming live on http://localhost:$PORT")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setOngoing(true)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+
+        // Start background thread for processing frames
+        backgroundThread = HandlerThread("ScreenCaptureThread").apply { start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+
+        // Start the web server
+        server = HttpMjpegServer(PORT)
+        server?.start()
+
+        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = mpManager.getMediaProjection(resultCode, resultData)
+
+        // Determine adjusted screen dimensions
+        val metrics = resources.displayMetrics
+        val width = (metrics.widthPixels * SCALE).toInt()
+        val height = (metrics.heightPixels * SCALE).toInt()
+        val density = metrics.densityDpi
+
+        // Optimize ImageReader configuration
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "ScreenStreamDisplay",
+            width, height, density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader!!.surface, null, backgroundHandler
+        )
+
+        imageReader!!.setOnImageAvailableListener({ reader ->
+            val currentTime = System.currentTimeMillis()
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+
+            // Frame throttling check
+            if (currentTime - lastFrameTime < FRAME_INTERVAL_MS) {
+                image.close()
+                return@setOnImageAvailableListener
+            }
+            lastFrameTime = currentTime
+
+            try {
+                val planes = image.planes
+                val buffer = planes[0].buffer
+                val pixelStride = planes[0].pixelStride
+                val rowStride = planes[0].rowStride
+                val rowPadding = rowStride - pixelStride * width
+
+                // Initialize or reuse preallocated Bitmap structure
+                val bitmapWidth = width + rowPadding / pixelStride
+                if (reusableBitmap == null || reusableBitmap!!.width != bitmapWidth || reusableBitmap!!.height != height) {
+                    reusableBitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+                }
+
+                reusableBitmap!!.copyPixelsFromBuffer(buffer)
+                image.close() // Close immediate hardware frame mapping cleanly
+
+                // Push compression and transmission onto worker thread pool to decouple capture loop
+                val processingBitmap = reusableBitmap
+                if (processingBitmap != null) {
+                    networkExecutor.execute {
+                        synchronized(jpegCompressionBuffer) {
+                            jpegCompressionBuffer.reset()
+                            // Crop out structural row padding if it exists
+                            val finalBitmap = if (rowPadding > 0) {
+                                Bitmap.createBitmap(processingBitmap, 0, 0, width, height)
+                            } else {
+                                processingBitmap
+                            }
+                            
+                            if (finalBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, jpegCompressionBuffer)) {
+                                server?.broadcastFrame(jpegCompressionBuffer.toByteArray())
+                            }
+                            
+                            if (rowPadding > 0 && finalBitmap != processingBitmap) {
+                                finalBitmap.recycle()
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                try { image.close() } catch (_: Exception) {}
+            }
+        }, backgroundHandler)
+    }
+
+    private fun stopStreaming() {
+        virtualDisplay?.release()
+        imageReader?.setOnImageAvailableListener(null, null)
+        imageReader?.close()
+        mediaProjection?.stop()
+        server?.stop()
+        backgroundThread?.quitSafely()
+        networkExecutor.shutdownNow()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(CHANNEL_ID, "Screen Stream", NotificationManager.IMPORTANCE_LOW)
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
+    }
+
+    override fun onDestroy() {
+        stopStreaming()
+        super.onDestroy()
+    }
+}
         const val EXTRA_CLIENT_COUNT = "clientCount"
 
         private const val CHANNEL_ID      = "screenstream_channel"
