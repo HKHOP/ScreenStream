@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:background="#0D1117"
+    android:padding="28dp">
+
+    <!-- App Title -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ScreenStream"
+        android:textSize="30sp"
+        android:textColor="#58A6FF"
+        android:textStyle="bold"
+        android:fontFamily="sans-serif-medium"
+        android:layout_marginTop="32dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Cast your screen over Wi-Fi"
+        android:textSize="13sp"
+        android:textColor="#8B949E"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="36dp"/>
+
+    <!-- Status badge -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="● Idle"
+        android:textSize="15sp"
+        android:textColor="#8B949E"
+        android:textStyle="bold"
+        android:layout_marginBottom="28dp"/>
+
+    <!-- URL card -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/card_bg"
+        android:padding="20dp"
+        android:layout_marginBottom="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Stream URL"
+            android:textSize="11sp"
+            android:textColor="#8B949E"
+            android:letterSpacing="0.1"
+            android:textAllCaps="true"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:id="@+id/tvUrl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="http://192.168.x.x:8080"
+            android:textSize="18sp"
+            android:textColor="#58A6FF"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Enter this URL in VLC → Network Stream"
+            android:textSize="12sp"
+            android:textColor="#8B949E"
+            android:layout_marginTop="6dp"/>
+    </LinearLayout>
+
+    <!-- Live info card (visible while streaming) -->
+    <LinearLayout
+        android:id="@+id/cardStream"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/card_bg_green"
+        android:padding="20dp"
+        android:layout_marginBottom="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvClients"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="No viewers connected"
+            android:textSize="15sp"
+            android:textColor="#3FB950"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Stream is running in the background"
+            android:textSize="12sp"
+            android:textColor="#8B949E"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <!-- Toggle button -->
+    <Button
+        android:id="@+id/btnToggle"
+        android:layout_width="240dp"
+        android:layout_height="52dp"
+        android:text="Start Streaming"
+        android:textSize="16sp"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#1F6FEB"
+        android:layout_marginBottom="20dp"
+        android:stateListAnimator="@null"/>
+
+    <!-- Instructions hint -->
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="How to watch:\n1. Open VLC on your TV, PC, or phone\n2. Go to Media → Open Network Stream\n3. Paste the URL above and press Play"
+        android:textSize="13sp"
+        android:textColor="#8B949E"
+        android:lineSpacingMultiplier="1.5"
+        android:visibility="gone"
+        android:layout_marginTop="8dp"/>
+
+    <View
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_weight="1"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Both devices must be on the same Wi-Fi network"
+        android:textSize="11sp"
+        android:textColor="#484F58"
+        android:layout_marginBottom="16dp"
+        android:gravity="center"/>
+
+</LinearLayout>
