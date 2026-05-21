@@ -10,7 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Adds the JitPack repository so Gradle can find and download the RTSP engine
+        // Adds the repository where the RTSP server engine is hosted
         maven { url 'https://jitpack.io' }
     }
 }
