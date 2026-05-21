@@ -13,12 +13,12 @@ import android.util.DisplayMetrics
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
-import com.pedro.rtsp.utils.ConnectCheckerRtsp
+import com.pedro.rtspserver.rtsp.RtspServerListener
 import com.pedro.rtspserver.RtspServerDisplay
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-class ScreenStreamService : Service(), ConnectCheckerRtsp {
+class ScreenStreamService : Service(), RtspServerListener {
 
     companion object {
         const val ACTION_START = "com.screenstream.action.START"
@@ -271,10 +271,7 @@ class ScreenStreamService : Service(), ConnectCheckerRtsp {
 
     // ---------------- RTSP CALLBACKS ----------------
 
-    override fun onConnectionSuccessRtsp() { broadcast(1) }
-    override fun onConnectionFailedRtsp(reason: String) = Log.e(TAG, reason)
-    override fun onDisconnectRtsp() = broadcast(0)
-    fun onAuthErrorRtsp() = Log.e(TAG, "auth error")
-    fun onAuthSuccessRtsp() = Log.i(TAG, "auth ok")
-    fun onNewBitrateRtsp(bitrate: Long) {}
+    override fun onRtspConnected() { broadcast(1) }
+    override fun onRtspConnectError() = Log.e(TAG, "RTSP connection error")
+    override fun onRtspDisconnect() = broadcast(0)
 }
