@@ -242,6 +242,7 @@ class ScreenStreamService : Service() {
                             else src
 
                             frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
+                        frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
 
                             httpServer?.broadcastFrame(bufferStream.rawBuffer(), bufferStream.size())
 
