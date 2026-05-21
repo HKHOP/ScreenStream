@@ -105,6 +105,7 @@ class ScreenStreamService : Service() {
     private var audioBitrateKbps = 128
     private var audioSampleRate = 44100
     private var audioStereo = true
+    private var audioRequired = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -149,6 +150,7 @@ class ScreenStreamService : Service() {
         audioBitrateKbps = prefs.getString("audio_bitrate_kbps", "128")?.toIntOrNull()?.coerceIn(32, 320) ?: 128
         audioSampleRate = prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100
         audioStereo = prefs.getBoolean("audio_stereo", true)
+        audioRequired = prefs.getBoolean("audio_required", false)
         audioActive = rtspMode && audioEnabled
 
         if (audioEnabled && !rtspMode) {
@@ -177,15 +179,18 @@ class ScreenStreamService : Service() {
         val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(1)
         val density = metrics.densityDpi
 
-        if (rtspMode) {
+        val started = if (rtspMode) {
             startRtsp(width, height, density, resultCode, data)
         } else {
             startHttp(width, height, density, resultCode, data)
+            true
         }
 
-        // initial broadcast: 0 clients, streaming started
-        setStreamingState(true)
-        broadcast(0, true)
+        if (started) {
+            // initial broadcast: 0 clients, streaming started
+            setStreamingState(true)
+            broadcast(0, true)
+        }
     }
 
     // ---------------- HTTP MODE ----------------
@@ -295,27 +300,45 @@ class ScreenStreamService : Service() {
         density: Int,
         code: Int,
         data: Intent
-    ) {
+    ): Boolean {
         rtspEngine = ReflectiveRtspEngine.createOrNull(this, rtspPort)
         if (rtspEngine == null) {
             Log.w(TAG, "RTSP library not found on classpath; RTSP mode unavailable")
+            setStreamingState(false)
+            broadcast(0, false)
             stopSelf()
-            return
+            return false
         }
 
-        val audioPrepared = if (audioEnabled) rtspEngine?.configureAudio() == true else false
         val videoPrepared = rtspEngine?.configureVideo(w, h, fps, 2_500_000, 0, density) == true
-
         if (!videoPrepared) {
             Log.e(TAG, "RTSP prepareVideo failed")
+            setStreamingState(false)
+            broadcast(0, false)
             stopSelf()
-            return
+            return false
+        }
+
+        val audioPrepared = if (audioEnabled) {
+            rtspEngine?.configureAudio(audioBitrateKbps, audioSampleRate, audioStereo) == true
+        } else {
+            false
+        }
+
+        if (audioEnabled && !audioPrepared) {
+            val fallbackAllowed = !audioRequired
+            Log.w(TAG, "RTSP audio prepare failed (required=$audioRequired, bitrateKbps=$audioBitrateKbps, sampleRate=$audioSampleRate, stereo=$audioStereo)")
+            if (!fallbackAllowed) {
+                Log.e(TAG, "Audio is required; aborting RTSP startup")
+                setStreamingState(false)
+                broadcast(0, false)
+                stopSelf()
+                return false
+            }
+            Log.w(TAG, "Audio fallback allowed; continuing with video-only RTSP stream")
         }
 
         audioActive = audioEnabled && audioPrepared
-        if (audioEnabled && !audioPrepared) {
-            Log.w(TAG, "RTSP audio was not prepared; continuing with video-only stream")
-        }
 
         val started = rtspEngine?.start(code, data) == true
         if (!started) {
@@ -323,7 +346,10 @@ class ScreenStreamService : Service() {
             setStreamingState(false)
             broadcast(0, false)
             stopSelf()
+            return false
         }
+
+        return true
     }
 
     // ---------------- BROADCAST ----------------

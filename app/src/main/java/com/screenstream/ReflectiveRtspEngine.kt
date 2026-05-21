@@ -49,14 +49,65 @@ class ReflectiveRtspEngine private constructor(
         }
     }
 
-    override fun configureAudio(): Boolean {
-        return try {
-            val m = clazz.getMethod("prepareAudio")
-            (m.invoke(instance) as? Boolean) == true
-        } catch (e: Exception) {
-            Log.w(TAG, "prepareAudio not available or failed", e)
-            false
+    override fun configureAudio(bitrateKbps: Int, sampleRate: Int, stereo: Boolean): Boolean {
+        val bitrateBps = bitrateKbps.coerceIn(32, 320) * 1024
+
+        // Try known/likely signatures first, then fallback to any compatible prepareAudio overload.
+        val signatureCandidates = listOf(
+            arrayOf(Integer.TYPE, Integer.TYPE, java.lang.Boolean.TYPE),
+            arrayOf(Integer.TYPE, Integer.TYPE, Integer.TYPE),
+            arrayOf(Integer.TYPE, Integer.TYPE),
+            arrayOf(Integer.TYPE),
+            emptyArray<Class<*>>()
+        )
+
+        for (params in signatureCandidates) {
+            try {
+                val m = clazz.getMethod("prepareAudio", *params)
+                val args = buildAudioArgs(params, bitrateBps, sampleRate, stereo)
+                return (m.invoke(instance, *args) as? Boolean) == true
+            } catch (_: NoSuchMethodException) {
+                // Continue trying next supported signature.
+            } catch (e: Exception) {
+                Log.w(TAG, "prepareAudio invocation failed for ${params.joinToString { it.simpleName }}", e)
+                return false
+            }
         }
+
+        val reflective = clazz.methods.firstOrNull { it.name == "prepareAudio" }
+        if (reflective != null) {
+            return try {
+                val args = buildAudioArgs(reflective.parameterTypes, bitrateBps, sampleRate, stereo)
+                (reflective.invoke(instance, *args) as? Boolean) == true
+            } catch (e: Exception) {
+                Log.w(TAG, "prepareAudio reflective fallback failed", e)
+                false
+            }
+        }
+
+        Log.w(TAG, "prepareAudio not available")
+        return false
+    }
+
+
+    private fun buildAudioArgs(paramTypes: Array<Class<*>>, bitrateBps: Int, sampleRate: Int, stereo: Boolean): Array<Any> {
+        val stereoAsInt = if (stereo) 2 else 1
+        val values = ArrayList<Any>(paramTypes.size)
+
+        paramTypes.forEachIndexed { index, param ->
+            val value: Any = when {
+                param == java.lang.Boolean.TYPE || param == java.lang.Boolean::class.java -> stereo
+                param == Integer.TYPE || param == java.lang.Integer::class.java -> when (index) {
+                    0 -> bitrateBps
+                    1 -> sampleRate
+                    else -> stereoAsInt
+                }
+                else -> throw IllegalArgumentException("Unsupported prepareAudio parameter type: $param")
+            }
+            values.add(value)
+        }
+
+        return values.toTypedArray()
     }
 
     override fun start(resultCode: Int, data: Intent): Boolean {
