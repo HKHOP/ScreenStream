@@ -11,10 +11,8 @@ android {
         applicationId "com.screenstream"
         minSdk 26
         targetSdk 34
-
         versionCode 1
         versionName "1.0"
-
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -26,37 +24,35 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = "1.8"
     }
 }
 
 dependencies {
+
     // Core Android
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
-    // Preferences UI
+    // Preferences
     implementation 'androidx.preference:preference-ktx:1.2.1'
 
     // =========================
-    // RTSP + STREAMING STACK
+    // STABLE RTSP STACK (KOTLIN 1.9 COMPATIBLE)
     // =========================
 
-    // RootEncoder (modern version)
-    implementation "com.github.pedroSG94.RootEncoder:library:2.6.6"
-
-    // RTSP Server plugin
-    implementation "com.github.pedroSG94:RTSP-Server:1.3.6"
+    implementation "com.github.pedroSG94.RootEncoder:library:2.6.1"
+    implementation "com.github.pedroSG94:RTSP-Server:1.2.7"
 
     // =========================
-    // TESTING
+    // TEST
     // =========================
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
