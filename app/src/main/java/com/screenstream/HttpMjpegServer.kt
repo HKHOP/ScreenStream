@@ -6,96 +6,118 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class HttpMjpegServer(
     private val port: Int,
     private val onClientCountChanged: (Int) -> Unit
 ) {
+
     private var serverSocket: ServerSocket? = null
-    private var isRunning = false
-    private val clientStreams = CopyOnWriteArrayList<OutputStream>()
-    private val serverExecutor = Executors.newCachedThreadPool()
+    private val isRunning = AtomicBoolean(false)
+
+    private val clients = CopyOnWriteArrayList<OutputStream>()
+    private val executor = Executors.newCachedThreadPool()
 
     fun start() {
-        isRunning = true
-        serverExecutor.execute {
+        if (isRunning.getAndSet(true)) return
+
+        executor.execute {
             try {
                 serverSocket = ServerSocket(port)
-                while (isRunning) {
+
+                while (isRunning.get()) {
                     val socket = serverSocket?.accept() ?: break
-                    serverExecutor.execute { handleClient(socket) }
+                    executor.execute { handleClient(socket) }
                 }
-            } catch (e: IOException) {
-                e.printStackTrace()
+
+            } catch (_: IOException) {
             }
         }
     }
 
     private fun handleClient(socket: Socket) {
+        var output: OutputStream? = null
+
         try {
-            val outputStream = socket.getOutputStream()
-            
-            val header = ("HTTP/1.0 200 OK\r\n" +
-                    "Server: AndroidScreenStream\r\n" +
-                    "Connection: close\r\n" +
-                    "Max-Age: 0\r\n" +
-                    "Expires: 0\r\n" +
-                    "Cache-Control: no-cache, private, no-store, must-revalidate, max-age=0, post-check=0, pre-check=0\r\n" +
-                    "Pragma: no-cache\r\n" +
-                    "Content-Type: multipart/x-mixed-replace; boundary=--boundary\r\n\r\n").toByteArray()
-            
-            outputStream.write(header)
-            outputStream.flush()
+            output = socket.getOutputStream()
 
-            clientStreams.add(outputStream)
-            onClientCountChanged(clientStreams.size)
+            val header =
+                "HTTP/1.0 200 OK\r\n" +
+                "Server: ScreenStream\r\n" +
+                "Connection: close\r\n" +
+                "Cache-Control: no-cache\r\n" +
+                "Pragma: no-cache\r\n" +
+                "Content-Type: multipart/x-mixed-replace; boundary=boundary\r\n\r\n"
 
-            val inputStream = socket.getInputStream()
-            val dummyBuffer = ByteArray(1024)
-            while (isRunning && inputStream.read(dummyBuffer) != -1) {
-                // Keep-alive loop
+            output.write(header.toByteArray())
+            output.flush()
+
+            clients.add(output)
+            onClientCountChanged(clients.size)
+
+            val buffer = ByteArray(1024)
+
+            // keep connection alive until closed
+            val input = socket.getInputStream()
+
+            while (isRunning.get()) {
+                val read = input.read(buffer)
+                if (read == -1) break
             }
-        } catch (e: IOException) {
-            // Connection dropped
+
+        } catch (_: IOException) {
+
         } finally {
             try {
-                val os = socket.getOutputStream()
-                clientStreams.remove(os)
-                onClientCountChanged(clientStreams.size)
+                output?.let {
+                    clients.remove(it)
+                }
+                onClientCountChanged(clients.size)
                 socket.close()
             } catch (_: Exception) {}
         }
     }
 
-    fun broadcastFrame(jpegBytes: ByteArray) {
-        if (clientStreams.isEmpty()) return
+    fun broadcastFrame(jpeg: ByteArray) {
+        if (!isRunning.get() || clients.isEmpty()) return
 
-        val frameHeader = ("--boundary\r\n" +
-                "Content-Type: image/jpeg\r\n" +
-                "Content-Length: ${jpegBytes.size}\r\n\r\n").toByteArray()
+        val header =
+            "--boundary\r\n" +
+            "Content-Type: image/jpeg\r\n" +
+            "Content-Length: ${jpeg.size}\r\n\r\n"
 
-        for (stream in clientStreams) {
+        val headerBytes = header.toByteArray()
+
+        for (client in clients) {
             try {
-                stream.write(frameHeader)
-                stream.write(jpegBytes)
-                stream.write("\r\n".toByteArray())
-                stream.flush()
-            } catch (e: IOException) {
-                clientStreams.remove(stream)
-                onClientCountChanged(clientStreams.size)
+                client.write(headerBytes)
+                client.write(jpeg)
+                client.write("\r\n".toByteArray())
+                client.flush()
+            } catch (_: IOException) {
+                clients.remove(client)
+                onClientCountChanged(clients.size)
             }
         }
     }
 
     fun stop() {
-        isRunning = false
+        if (!isRunning.getAndSet(false)) return
+
         try {
             serverSocket?.close()
-        } catch (e: IOException) {
-            e.printStackTrace()
+        } catch (_: IOException) {}
+
+        for (c in clients) {
+            try {
+                c.close()
+            } catch (_: Exception) {}
         }
-        clientStreams.clear()
+
+        clients.clear()
         onClientCountChanged(0)
-        serverExecutor.shutdownNow()
+
+        executor.shutdownNow()
     }
-}
+}}
