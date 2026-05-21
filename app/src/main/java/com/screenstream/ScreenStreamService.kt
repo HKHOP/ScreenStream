@@ -274,7 +274,7 @@ class ScreenStreamService : Service(), ConnectCheckerRtsp {
     override fun onConnectionSuccessRtsp() { broadcast(1) }
     override fun onConnectionFailedRtsp(reason: String) = Log.e(TAG, reason)
     override fun onDisconnectRtsp() = broadcast(0)
-    override fun onAuthErrorRtsp() = Log.e(TAG, "auth error")
-    override fun onAuthSuccessRtsp() = Log.i(TAG, "auth ok")
-    override fun onNewBitrateRtsp(bitrate: Long) {}
+    fun onAuthErrorRtsp() = Log.e(TAG, "auth error")
+    fun onAuthSuccessRtsp() = Log.i(TAG, "auth ok")
+    fun onNewBitrateRtsp(bitrate: Long) {}
 }
