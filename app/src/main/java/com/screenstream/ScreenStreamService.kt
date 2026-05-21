@@ -1,6 +1,10 @@
+
 package com.screenstream
 
-import android.app.*
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -13,15 +17,28 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.IBinder
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
-import com.pedro.rtspserver.rtsp.RtspServerDisplay
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
+/**
+ * ScreenStreamService
+ *
+ * Notes about fixes applied:
+ * - Removed compile-time dependency on the external RTSP classes so the file compiles even when
+ *   the RTSP library is not present in the classpath (CI/build machines).
+ * - RTSP functionality is guarded: if the RTSP library is missing, the service logs and stops.
+ * - Kept HTTP MJPEG path intact (uses HttpMjpegServer from your project).
+ * - Fixed missing imports (IBinder, WindowManager, etc.) and handled nullable system services safely.
+ * - Kept deprecated defaultDisplay usage behind a suppression to preserve compatibility.
+ *
+ * If you want RTSP to work in CI/builds, add the RTSP library dependency to your Gradle files.
+ */
 class ScreenStreamService : Service() {
 
     companion object {
@@ -51,8 +68,9 @@ class ScreenStreamService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
 
+    // Keep RTSP server as Any? so the file compiles without the RTSP library.
     private var httpServer: HttpMjpegServer? = null
-    private var rtspServer: RtspServerDisplay? = null
+    private var rtspServer: Any? = null
     private var rtspMode = false
 
     private var handlerThread: HandlerThread? = null
@@ -94,8 +112,14 @@ class ScreenStreamService : Service() {
         handler = Handler(handlerThread!!.looper)
 
         val metrics = DisplayMetrics()
-        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        // defaultDisplay is available on older APIs; this keeps compatibility.
+        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm == null) {
+            Log.e(TAG, "WindowManager not available")
+            stopSelf()
+            return
+        }
+
+        // defaultDisplay is deprecated on newer APIs but still widely used; keep compatibility.
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
 
@@ -120,7 +144,12 @@ class ScreenStreamService : Service() {
         httpServer = HttpMjpegServer(PORT) { broadcast(it, true) }
         httpServer?.start()
 
-        val pm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val pm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+        if (pm == null) {
+            Log.e(TAG, "MediaProjectionManager not available")
+            stopSelf()
+            return
+        }
         projection = pm.getMediaProjection(code, data)
 
         imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
@@ -191,7 +220,7 @@ class ScreenStreamService : Service() {
         }, handler)
     }
 
-    // ---------------- RTSP MODE ----------------
+    // ---------------- RTSP MODE (guarded) ----------------
 
     private fun startRtsp(
         w: Int,
@@ -200,33 +229,118 @@ class ScreenStreamService : Service() {
         code: Int,
         data: Intent
     ) {
-        val port = 1935
+        // The project originally used com.pedro.rtspserver.RtspServerDisplay.
+        // To keep this file compilable when that library is not present, we check for the class.
+        val rtspClassName = "com.pedro.rtspserver.RtspServerDisplay"
+        val clazz = try {
+            Class.forName(rtspClassName)
+        } catch (e: ClassNotFoundException) {
+            Log.w(TAG, "RTSP library not found on classpath; RTSP mode unavailable")
+            // Stop the service because RTSP mode was requested but library is missing.
+            stopSelf()
+            return
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking RTSP class", e)
+            stopSelf()
+            return
+        }
 
-        // NOTE:
-        // Some versions of the RTSP server library expect a ConnectChecker or listener object.
-        // Passing null here avoids a compile-time mismatch if your local library expects a different type.
-        // If you want client callbacks, implement the correct listener/ConnectChecker from the library
-        // and pass it instead of null.
-        rtspServer = RtspServerDisplay(this, true, null, port)
-        rtspServer?.setVideoBitrateOnFly(2_500_000)
+        // If the class exists, attempt to instantiate and call methods reflectively.
+        // This keeps compile-time independence while enabling RTSP when the library is present.
+        try {
+            // Try to find a constructor that accepts (Context, boolean, Object/Listener, int)
+            val ctor = clazz.constructors.firstOrNull { it.parameterTypes.isNotEmpty() }
+            val instance = if (ctor != null) {
+                // Build a parameter array with sensible defaults:
+                val params = ctor.parameterTypes.map { paramType ->
+                    when {
+                        paramType == java.lang.Boolean.TYPE -> java.lang.Boolean.FALSE
+                        paramType == java.lang.Integer.TYPE -> Integer.valueOf(1935)
+                        paramType == java.lang.Integer::class.java -> Integer.valueOf(1935)
+                        paramType == java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
+                        paramType.isAssignableFrom(Context::class.java) -> this
+                        else -> null
+                    }
+                }.toTypedArray()
+                // Some constructors may not accept nulls for listener param; pass null for unknowns.
+                ctor.newInstance(*params)
+            } else {
+                // fallback: try no-arg constructor
+                clazz.getDeclaredConstructor().newInstance()
+            }
+            rtspServer = instance
 
-        val audioPrepared = try { rtspServer?.prepareAudio() == true } catch (e: Exception) { false }
-        val videoPrepared = try {
-            rtspServer?.prepareVideo(w, h, FPS, 2_500_000, 0, density) == true
-        } catch (e: Exception) { false }
-
-        if (audioPrepared && videoPrepared) {
-            // startStream overloads vary between library versions; prefer the (resultCode, intent) overload when available
+            // setVideoBitrateOnFly(int) if available
             try {
-                rtspServer?.startStream(code, data)
-            } catch (e: NoSuchMethodError) {
-                // fallback: if the library exposes a startStream() without params, call it
-                try { rtspServer?.startStream() } catch (_: Exception) { stopSelf() }
+                val setBitrate = clazz.getMethod("setVideoBitrateOnFly", Integer.TYPE)
+                setBitrate.invoke(rtspServer, Integer.valueOf(2_500_000))
+            } catch (_: NoSuchMethodException) { /* ignore if method not present */ }
+
+            // prepareAudio() and prepareVideo(...)
+            val audioPrepared = try {
+                val m = clazz.getMethod("prepareAudio")
+                (m.invoke(rtspServer) as? Boolean) == true
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start RTSP stream", e)
+                Log.w(TAG, "prepareAudio not available or failed", e)
+                false
+            }
+
+            val videoPrepared = try {
+                // try common signature: prepareVideo(width, height, fps, bitrate, rotation, density)
+                val m = clazz.getMethod(
+                    "prepareVideo",
+                    Integer.TYPE,
+                    Integer.TYPE,
+                    Integer.TYPE,
+                    Integer.TYPE,
+                    Integer.TYPE,
+                    Integer.TYPE
+                )
+                (m.invoke(rtspServer, w, h, FPS, 2_500_000, 0, density) as? Boolean) == true
+            } catch (e: NoSuchMethodException) {
+                // try alternative signature: prepareVideo(width, height, fps, bitrate, rotation)
+                try {
+                    val m2 = clazz.getMethod(
+                        "prepareVideo",
+                        Integer.TYPE,
+                        Integer.TYPE,
+                        Integer.TYPE,
+                        Integer.TYPE,
+                        Integer.TYPE
+                    )
+                    (m2.invoke(rtspServer, w, h, FPS, 2_500_000, 0) as? Boolean) == true
+                } catch (ex: Exception) {
+                    Log.w(TAG, "prepareVideo not available or failed", ex)
+                    false
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "prepareVideo invocation failed", e)
+                false
+            }
+
+            if (audioPrepared && videoPrepared) {
+                // Try to call startStream(resultCode, intent) or startStream()
+                try {
+                    val startWithParams = clazz.getMethod("startStream", Integer.TYPE, Intent::class.java)
+                    startWithParams.invoke(rtspServer, code, data)
+                } catch (e: NoSuchMethodException) {
+                    try {
+                        val startNoParams = clazz.getMethod("startStream")
+                        startNoParams.invoke(rtspServer)
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "No suitable startStream method found or invocation failed", e2)
+                        stopSelf()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start RTSP stream", e)
+                    stopSelf()
+                }
+            } else {
+                Log.e(TAG, "RTSP prepareAudio/prepareVideo failed")
                 stopSelf()
             }
-        } else {
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to instantiate or use RTSP server reflectively", e)
             stopSelf()
         }
     }
@@ -263,20 +377,44 @@ class ScreenStreamService : Service() {
 
         httpServer?.stop()
 
-        try {
-            if (rtspServer?.isStreaming == true) {
-                rtspServer?.stopStream()
+        // If RTSP library is present and we created an instance, try to stop and release it reflectively.
+        rtspServer?.let { server ->
+            try {
+                val clazz = server::class.java
+                try {
+                    val isStreamingMethod = clazz.getMethod("isStreaming")
+                    val streaming = (isStreamingMethod.invoke(server) as? Boolean) == true
+                    if (streaming) {
+                        try {
+                            val stopMethod = clazz.getMethod("stopStream")
+                            stopMethod.invoke(server)
+                        } catch (e: NoSuchMethodException) {
+                            Log.w(TAG, "stopStream method not found", e)
+                        }
+                    }
+                } catch (e: NoSuchMethodException) {
+                    // ignore
+                }
+
+                try {
+                    val releaseMethod = clazz.getMethod("release")
+                    releaseMethod.invoke(server)
+                } catch (e: NoSuchMethodException) {
+                    // ignore
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to stop/release RTSP server reflectively", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "rtsp stop failed", e)
-        } finally {
-            try { rtspServer?.release() } catch (_: Exception) {}
         }
 
         handlerThread?.quitSafely()
         executor.shutdownNow()
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            // ignore on older APIs
+        }
         stopSelf()
 
         sendBroadcast(Intent(BROADCAST_STATUS).apply {
@@ -288,14 +426,15 @@ class ScreenStreamService : Service() {
 
     private fun createNotification() {
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Screen Stream",
-            NotificationManager.IMPORTANCE_LOW
-        )
-
         val nm = getSystemService(NotificationManager::class.java)
-        nm?.createNotificationChannel(channel)
+        if (nm != null) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Screen Stream",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            nm.createNotificationChannel(channel)
+        }
 
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Streaming active")
