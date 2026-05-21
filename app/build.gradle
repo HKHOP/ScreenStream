@@ -9,10 +9,12 @@ android {
 
     defaultConfig {
         applicationId "com.screenstream"
-        minSdk 23
+        minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -35,8 +37,14 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    // Preferences Interface Support
+    
+    // Preferences UI Architecture Support
     implementation 'androidx.preference:preference:1.2.1'
-    // Rtsp Server Engine
-    implementation 'com.github.pedroSG94.rtmp-rtsp-stream-client-java:rtsp:2.4.7'
+    
+    // Local RTSP Server Engine for Android Screen Capture
+    implementation 'com.github.pedroSG94:rtsp-server-android:1.0.3'
+
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }
