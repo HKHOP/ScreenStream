@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.PreferenceManager
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -22,12 +23,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvClients: TextView
     private lateinit var tvHint: TextView
     private lateinit var btnToggle: Button
+    private lateinit var btnSettings: Button // Added Settings Reference
     private lateinit var cardStream: View
 
     private lateinit var projectionManager: MediaProjectionManager
     private var isStreaming = false
 
-    // ── Broadcast receiver for client count updates ───────────────────────────
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val count = intent?.getIntExtra(ScreenStreamService.EXTRA_CLIENT_COUNT, 0) ?: 0
@@ -35,7 +36,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── MediaProjection permission launcher ───────────────────────────────────
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -46,12 +46,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Notification permission launcher (Android 13+) ────────────────────────
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* proceed regardless */ }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -62,18 +60,22 @@ class MainActivity : AppCompatActivity() {
         tvHint     = findViewById(R.id.tvHint)
         btnToggle  = findViewById(R.id.btnToggle)
         cardStream = findViewById(R.id.cardStream)
+        
+        // Dynamic binding or creation of settings hook
+        btnSettings = Button(this).apply { text = "Settings" } 
+        // Tip: You can place an actual Button with id R.id.btnSettings in your activity_main.xml layout later!
 
         projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-
-        // Show stream URL immediately
-        val ip = getWifiIpAddress()
-        tvUrl.text = "http://$ip:${ScreenStreamService.PORT}"
 
         btnToggle.setOnClickListener {
             if (!isStreaming) startFlow() else stopFlow()
         }
+        
+        // Handle clicking into Settings
+        btnSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
 
-        // Request notification permission (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -89,6 +91,8 @@ class MainActivity : AppCompatActivity() {
             IntentFilter(ScreenStreamService.BROADCAST_STATUS),
             RECEIVER_NOT_EXPORTED
         )
+        // Refresh display addresses if configurations were altered while in settings screen
+        updateDisplayUrl()
     }
 
     override fun onPause() {
@@ -96,9 +100,20 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(statusReceiver)
     }
 
-    // ── Stream control ────────────────────────────────────────────────────────
+    private fun updateDisplayUrl() {
+        val ip = getWifiIpAddress()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val useRtsp = prefs.getBoolean("use_rtsp_mode", false)
+        
+        if (useRtsp) {
+            val rtspPort = prefs.getString("rtsp_port", "1935")
+            tvUrl.text = "rtsp://$ip:$rtspPort/"
+        } else {
+            tvUrl.text = "http://$ip:${ScreenStreamService.PORT}"
+        }
+    }
+
     private fun startFlow() {
-        // Android system dialog: "Allow ScreenStream to capture your screen?"
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
@@ -123,7 +138,6 @@ class MainActivity : AppCompatActivity() {
         showIdle()
     }
 
-    // ── UI helpers ────────────────────────────────────────────────────────────
     private fun showStreaming() {
         isStreaming = true
         btnToggle.text = "Stop Streaming"
@@ -133,6 +147,7 @@ class MainActivity : AppCompatActivity() {
         cardStream.visibility = View.VISIBLE
         tvClients.text = "0 viewers"
         tvHint.visibility = View.VISIBLE
+        updateDisplayUrl()
     }
 
     private fun showIdle() {
@@ -143,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         tvStatus.setTextColor(getColor(android.R.color.darker_gray))
         cardStream.visibility = View.GONE
         tvHint.visibility = View.GONE
+        updateDisplayUrl()
     }
 
     private fun updateClientCount(count: Int) {
@@ -150,11 +166,9 @@ class MainActivity : AppCompatActivity() {
                          else "$count viewer${if (count > 1) "s" else ""} connected  ✓"
     }
 
-    // ── Network ───────────────────────────────────────────────────────────────
     private fun getWifiIpAddress(): String {
         try {
             for (intf in NetworkInterface.getNetworkInterfaces()) {
-                // Prefer wlan interfaces
                 if (!intf.name.startsWith("wlan") && !intf.name.startsWith("eth")) continue
                 for (addr in intf.inetAddresses) {
                     if (!addr.isLoopbackAddress && addr is Inet4Address) {
@@ -162,7 +176,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            // Fallback: any non-loopback IPv4
             for (intf in NetworkInterface.getNetworkInterfaces()) {
                 for (addr in intf.inetAddresses) {
                     if (!addr.isLoopbackAddress && addr is Inet4Address) {
