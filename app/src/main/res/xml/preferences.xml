@@ -83,6 +83,12 @@
             app:summary="Enable dual-channel audio capture when supported"
             app:defaultValue="true" />
 
+        <SwitchPreferenceCompat
+            app:key="audio_required"
+            app:title="Require Audio"
+            app:summary="If enabled, fail RTSP startup when audio cannot be prepared"
+            app:defaultValue="false" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>
