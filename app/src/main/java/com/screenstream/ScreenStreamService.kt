@@ -52,6 +52,9 @@ class ScreenStreamService : Service() {
         const val BROADCAST_STATUS = "com.screenstream.BROADCAST_STATUS"
         const val EXTRA_CLIENT_COUNT = "CLIENT_COUNT"
         const val EXTRA_IS_STREAMING = "IS_STREAMING"
+        const val EXTRA_RTSP_MODE = "RTSP_MODE"
+        const val EXTRA_AUDIO_ACTIVE = "AUDIO_ACTIVE"
+        const val EXTRA_AUDIO_REQUESTED = "AUDIO_REQUESTED"
         private const val PREF_IS_STREAMING = "pref_is_streaming"
 
         const val PORT = 8080
@@ -97,6 +100,7 @@ class ScreenStreamService : Service() {
     private var scale = DEFAULT_SCALE
 
     private var audioEnabled = false
+    private var audioActive = false
     private var audioSource = "mic"
     private var audioBitrateKbps = 128
     private var audioSampleRate = 44100
@@ -140,6 +144,17 @@ class ScreenStreamService : Service() {
         frameIntervalMs = (1000L / configuredFps).coerceAtLeast(1L)
         frameLatencyMs = configuredLatencyMs
         jpegQuality = configuredJpegQuality
+        audioEnabled = prefs.getBoolean("enable_audio", false)
+        audioSource = prefs.getString("audio_source", "mic") ?: "mic"
+        audioBitrateKbps = prefs.getString("audio_bitrate_kbps", "128")?.toIntOrNull()?.coerceIn(32, 320) ?: 128
+        audioSampleRate = prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100
+        audioStereo = prefs.getBoolean("audio_stereo", true)
+        audioActive = rtspMode && audioEnabled
+
+        if (audioEnabled && !rtspMode) {
+            Log.w(TAG, "Audio requested but MJPEG mode is video-only. Ignoring audio until RTSP mode is enabled.")
+            audioActive = false
+        }
 
         createNotification()
 
@@ -339,13 +354,13 @@ class ScreenStreamService : Service() {
             } catch (_: NoSuchMethodException) { /* ignore if method not present */ }
 
             // prepareAudio() and prepareVideo(...)
-            val audioPrepared = try {
+            val audioPrepared = if (audioEnabled) try {
                 val m = clazz.getMethod("prepareAudio")
                 (m.invoke(rtspServer) as? Boolean) == true
             } catch (e: Exception) {
                 Log.w(TAG, "prepareAudio not available or failed", e)
                 false
-            }
+            } else false
 
             val videoPrepared = try {
                 // try common signature: prepareVideo(width, height, fps, bitrate, rotation, density)
@@ -381,7 +396,8 @@ class ScreenStreamService : Service() {
             }
 
             if (videoPrepared) {
-                if (!audioPrepared) {
+                audioActive = audioEnabled && audioPrepared
+                if (audioEnabled && !audioPrepared) {
                     Log.w(TAG, "RTSP audio was not prepared; continuing with video-only stream")
                 }
                 // Try to call startStream(resultCode, intent) or startStream()
@@ -431,6 +447,9 @@ class ScreenStreamService : Service() {
         sendBroadcast(Intent(BROADCAST_STATUS).apply {
             putExtra(EXTRA_CLIENT_COUNT, count)
             putExtra(EXTRA_IS_STREAMING, isStreaming)
+            putExtra(EXTRA_RTSP_MODE, rtspMode)
+            putExtra(EXTRA_AUDIO_REQUESTED, audioEnabled)
+            putExtra(EXTRA_AUDIO_ACTIVE, isStreaming && audioActive)
             setPackage(packageName)
         })
     }
