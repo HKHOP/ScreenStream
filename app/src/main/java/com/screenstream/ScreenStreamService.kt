@@ -25,6 +25,7 @@ import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * ScreenStreamService
@@ -85,7 +86,8 @@ class ScreenStreamService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
 
     private var bitmap: Bitmap? = null
-    private val bufferStream = ByteArrayOutputStream(512 * 1024)
+    private val bufferStream = FastByteArrayOutputStream(512 * 1024)
+    private val encodeInProgress = AtomicBoolean(false)
 
     private var lastFrame = 0L
 
@@ -188,6 +190,12 @@ class ScreenStreamService : Service() {
 
         imageReader?.setOnImageAvailableListener({ reader ->
 
+            if (httpServer?.hasClients() != true) {
+                val stale = try { reader.acquireLatestImage() } catch (_: Exception) { null }
+                stale?.close()
+                return@setOnImageAvailableListener
+            }
+
             val now = System.currentTimeMillis()
             val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
             if (img == null) return@setOnImageAvailableListener
@@ -219,20 +227,28 @@ class ScreenStreamService : Service() {
 
                 val src = bitmap ?: return@setOnImageAvailableListener
 
+                if (!encodeInProgress.compareAndSet(false, true)) {
+                    return@setOnImageAvailableListener
+                }
+
                 executor.execute {
-                    synchronized(bufferStream) {
+                    try {
+                        synchronized(bufferStream) {
 
-                        bufferStream.reset()
+                            bufferStream.reset()
 
-                        val frame = if (padding > 0)
-                            Bitmap.createBitmap(src, 0, 0, w, h)
-                        else src
+                            val frame = if (padding > 0)
+                                Bitmap.createBitmap(src, 0, 0, w, h)
+                            else src
 
-                        frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
+                            frame.compress(Bitmap.CompressFormat.JPEG, jpegQuality, bufferStream)
 
-                        httpServer?.broadcastFrame(bufferStream.toByteArray())
+                            httpServer?.broadcastFrame(bufferStream.rawBuffer(), bufferStream.size())
 
-                        if (frame !== src) frame.recycle()
+                            if (frame !== src) frame.recycle()
+                        }
+                    } finally {
+                        encodeInProgress.set(false)
                     }
                 }
 
@@ -509,5 +525,9 @@ class ScreenStreamService : Service() {
             .edit()
             .putBoolean(PREF_IS_STREAMING, streaming)
             .apply()
+    }
+
+    private class FastByteArrayOutputStream(size: Int) : ByteArrayOutputStream(size) {
+        fun rawBuffer(): ByteArray = buf
     }
 }
