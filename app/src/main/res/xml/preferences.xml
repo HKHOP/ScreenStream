@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory app:title="Streaming Engine Configuration">
+        
+        <SwitchPreferenceCompat
+            app:key="use_rtsp_mode"
+            app:title="Enable RTSP Streaming"
+            app:summary="Switch from traditional HTTP MJPEG streaming to an RTSP server layer"
+            app:defaultValue="false" />
+            
+        <EditTextPreference
+            app:key="rtsp_port"
+            app:title="RTSP Server Port"
+            app:dialogTitle="Set Server Port"
+            app:defaultValue="1935"
+            app:useSimpleSummaryProvider="true" />
+            
+    </PreferenceCategory>
+
+</PreferenceScreen>
