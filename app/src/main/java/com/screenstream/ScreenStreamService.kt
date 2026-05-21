@@ -1,6 +1,9 @@
 package com.screenstream
 
-import android.app.*
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -28,6 +31,11 @@ class ScreenStreamService : Service() {
         const val EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE"
         const val EXTRA_PROJECTION_DATA = "EXTRA_PROJECTION_DATA"
         const val BROADCAST_STATUS = "com.screenstream.BROADCAST_STATUS"
+        
+        // Added the missing constants expected by MainActivity
+        const val EXTRA_CLIENT_COUNT = "CLIENT_COUNT"
+        const val EXTRA_IS_STREAMING = "IS_STREAMING"
+        
         const val PORT = 8080
         
         private const val TAG = "ScreenStreamService"
@@ -171,8 +179,8 @@ class ScreenStreamService : Service() {
 
     private fun updateStatusBroadcast(clientCount: Int) {
         val statusIntent = Intent(BROADCAST_STATUS).apply {
-            putExtra("CLIENT_COUNT", clientCount)
-            putExtra("IS_STREAMING", true)
+            putExtra(EXTRA_CLIENT_COUNT, clientCount)
+            putExtra(EXTRA_IS_STREAMING, true)
             setPackage(packageName)
         }
         sendBroadcast(statusIntent)
@@ -195,13 +203,26 @@ class ScreenStreamService : Service() {
         }
 
         val statusIntent = Intent(BROADCAST_STATUS).apply {
-            putExtra("CLIENT_COUNT", 0)
-            putExtra("IS_STREAMING", false)
+            putExtra(EXTRA_CLIENT_COUNT, 0)
+            putExtra(EXTRA_IS_STREAMING, false)
             setPackage(packageName)
         }
         sendBroadcast(statusIntent)
 
         stopSelf()
+    }
+
+    // Fixed the missing function
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Screen Stream",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
     }
 
     override fun onDestroy() {
