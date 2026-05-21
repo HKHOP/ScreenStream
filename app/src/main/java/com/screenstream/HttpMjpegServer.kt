@@ -80,19 +80,23 @@ class HttpMjpegServer(
     }
 
     fun broadcastFrame(jpeg: ByteArray) {
+        broadcastFrame(jpeg, jpeg.size)
+    }
+
+    fun broadcastFrame(jpeg: ByteArray, length: Int) {
         if (!isRunning.get() || clients.isEmpty()) return
 
         val header =
             "--boundary\r\n" +
             "Content-Type: image/jpeg\r\n" +
-            "Content-Length: ${jpeg.size}\r\n\r\n"
+            "Content-Length: $length\r\n\r\n"
 
         val headerBytes = header.toByteArray()
 
         for (client in clients) {
             try {
                 client.write(headerBytes)
-                client.write(jpeg)
+                client.write(jpeg, 0, length)
                 client.write("\r\n".toByteArray())
                 client.flush()
             } catch (_: IOException) {
@@ -101,6 +105,8 @@ class HttpMjpegServer(
             }
         }
     }
+
+    fun hasClients(): Boolean = clients.isNotEmpty()
 
     fun stop() {
         if (!isRunning.getAndSet(false)) return
