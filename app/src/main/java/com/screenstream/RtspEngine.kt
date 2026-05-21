@@ -4,6 +4,7 @@ import android.content.Intent
 
 interface RtspEngine {
     fun configureVideo(width: Int, height: Int, fps: Int, bitrate: Int, rotation: Int, density: Int): Boolean
+    fun configureAudioSource(source: String): Boolean
     fun configureAudio(bitrateKbps: Int, sampleRate: Int, stereo: Boolean): Boolean
     fun start(resultCode: Int, data: Intent): Boolean
     fun stop()

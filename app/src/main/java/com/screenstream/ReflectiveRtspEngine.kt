@@ -89,6 +89,25 @@ class ReflectiveRtspEngine private constructor(
         return false
     }
 
+    override fun configureAudioSource(source: String): Boolean {
+        val sourceMethod = clazz.methods.firstOrNull { it.name == "setAudioSource" } ?: return true
+        val sourceInt = when (source) {
+            "playback" -> 1
+            else -> 0
+        }
+        return try {
+            val param = sourceMethod.parameterTypes.firstOrNull()
+            when (param) {
+                Integer.TYPE, java.lang.Integer::class.java -> sourceMethod.invoke(instance, sourceInt)
+                else -> return false
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "setAudioSource invocation failed", e)
+            false
+        }
+    }
+
 
     private fun buildAudioArgs(paramTypes: Array<Class<*>>, bitrateBps: Int, sampleRate: Int, stereo: Boolean): Array<Any> {
         val stereoAsInt = if (stereo) 2 else 1
