@@ -83,6 +83,17 @@ class ScreenStreamService : Service() {
     private val bufferStream = ByteArrayOutputStream(512 * 1024)
 
     private var lastFrame = 0L
+    private var fps = DEFAULT_FPS
+    private var jpegQuality = DEFAULT_QUALITY
+    private var frameLatencyMs = DEFAULT_FRAME_LATENCY_MS
+    private var frameIntervalMs = 1000L / DEFAULT_FPS
+    private var scale = DEFAULT_SCALE
+
+    private var audioEnabled = false
+    private var audioSource = "mic"
+    private var audioBitrateKbps = 128
+    private var audioSampleRate = 44100
+    private var audioStereo = true
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -108,6 +119,27 @@ class ScreenStreamService : Service() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         rtspMode = prefs.getBoolean("use_rtsp_mode", false)
         rtspPort = prefs.getString("rtsp_port", "1935")?.toIntOrNull() ?: 1935
+        fps = (prefs.getString("stream_fps", DEFAULT_FPS.toString())?.toIntOrNull() ?: DEFAULT_FPS)
+            .coerceIn(5, 60)
+        jpegQuality = (prefs.getString("jpeg_quality", DEFAULT_QUALITY.toString())?.toIntOrNull()
+            ?: DEFAULT_QUALITY).coerceIn(10, 100)
+        frameLatencyMs = (prefs.getString("stream_latency_ms", DEFAULT_FRAME_LATENCY_MS.toString())
+            ?.toLongOrNull() ?: DEFAULT_FRAME_LATENCY_MS).coerceIn(0L, 1000L)
+        scale = (prefs.getString("stream_scale", DEFAULT_SCALE.toString())?.toFloatOrNull()
+            ?: DEFAULT_SCALE).coerceIn(0.2f, 1.0f)
+        frameIntervalMs = (1000L / fps).coerceAtLeast(1L)
+
+        audioEnabled = prefs.getBoolean("enable_audio", false)
+        audioSource = prefs.getString("audio_source", "mic")
+            ?.takeIf { it == "mic" || it == "playback" } ?: "mic"
+        if (audioSource == "playback" && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            audioSource = "mic"
+        }
+        audioBitrateKbps = (prefs.getString("audio_bitrate_kbps", "128")?.toIntOrNull() ?: 128)
+            .coerceIn(32, 320)
+        audioSampleRate = (prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100)
+            .let { if (it == 48000) 48000 else 44100 }
+        audioStereo = prefs.getBoolean("audio_stereo", true)
 
         createNotification()
 
