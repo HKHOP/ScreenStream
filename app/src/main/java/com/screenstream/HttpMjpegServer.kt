@@ -1,4 +1,4 @@
-package com.hkhop.screenstream
+package com.screenstream
 
 import java.io.IOException
 import java.io.OutputStream
@@ -7,8 +7,10 @@ import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 
-class HttpMjpegServer(private val port: Int) {
-
+class HttpMjpegServer(
+    private val port: Int,
+    private val onClientCountChanged: (Int) -> Unit
+) {
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
     private val clientStreams = CopyOnWriteArrayList<OutputStream>()
@@ -33,7 +35,6 @@ class HttpMjpegServer(private val port: Int) {
         try {
             val outputStream = socket.getOutputStream()
             
-            // Standard HTTP MJPEG Header configuration
             val header = ("HTTP/1.0 200 OK\r\n" +
                     "Server: AndroidScreenStream\r\n" +
                     "Connection: close\r\n" +
@@ -46,20 +47,21 @@ class HttpMjpegServer(private val port: Int) {
             outputStream.write(header)
             outputStream.flush()
 
-            // Register stream for global frame broadcast updates
             clientStreams.add(outputStream)
+            onClientCountChanged(clientStreams.size)
 
-            // Keep socket alive until client explicitly drops connection
             val inputStream = socket.getInputStream()
             val dummyBuffer = ByteArray(1024)
             while (isRunning && inputStream.read(dummyBuffer) != -1) {
-                // Keep-alive loop reading client requests/headers
+                // Keep-alive loop
             }
         } catch (e: IOException) {
-            // Client closed stream connection
+            // Connection dropped
         } finally {
             try {
-                clientStreams.remove(socket.getOutputStream())
+                val os = socket.getOutputStream()
+                clientStreams.remove(os)
+                onClientCountChanged(clientStreams.size)
                 socket.close()
             } catch (_: Exception) {}
         }
@@ -68,7 +70,6 @@ class HttpMjpegServer(private val port: Int) {
     fun broadcastFrame(jpegBytes: ByteArray) {
         if (clientStreams.isEmpty()) return
 
-        // Multi-part formatting block
         val frameHeader = ("--boundary\r\n" +
                 "Content-Type: image/jpeg\r\n" +
                 "Content-Length: ${jpegBytes.size}\r\n\r\n").toByteArray()
@@ -80,8 +81,8 @@ class HttpMjpegServer(private val port: Int) {
                 stream.write("\r\n".toByteArray())
                 stream.flush()
             } catch (e: IOException) {
-                // Remove broken pipe connection safely
                 clientStreams.remove(stream)
+                onClientCountChanged(clientStreams.size)
             }
         }
     }
@@ -94,6 +95,7 @@ class HttpMjpegServer(private val port: Int) {
             e.printStackTrace()
         }
         clientStreams.clear()
+        onClientCountChanged(0)
         serverExecutor.shutdownNow()
     }
 }
