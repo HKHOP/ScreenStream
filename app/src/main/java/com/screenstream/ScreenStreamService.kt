@@ -75,7 +75,7 @@ class ScreenStreamService : Service() {
 
     // Keep RTSP server as Any? so the file compiles without the RTSP library.
     private var httpServer: HttpMjpegServer? = null
-    private var rtspServer: Any? = null
+    private var rtspEngine: RtspEngine? = null
     private var rtspMode = false
     private var rtspPort = 1935
     private var scale = DEFAULT_SCALE
@@ -296,147 +296,32 @@ class ScreenStreamService : Service() {
         code: Int,
         data: Intent
     ) {
-        // The project originally used com.pedro.rtspserver.RtspServerDisplay.
-        // To keep this file compilable when that library is not present, we check for the class.
-        val classCandidates = listOf(
-            "com.pedro.rtspserver.RtspServerDisplay",
-            "com.pedro.library.rtsp.rtspserver.RtspServerDisplay"
-        )
-        val clazz = classCandidates.firstNotNullOfOrNull { className ->
-            try {
-                Class.forName(className)
-            } catch (_: Exception) {
-                null
-            }
-        }
-        if (clazz == null) {
+        rtspEngine = ReflectiveRtspEngine.createOrNull(this, rtspPort)
+        if (rtspEngine == null) {
             Log.w(TAG, "RTSP library not found on classpath; RTSP mode unavailable")
             stopSelf()
             return
         }
 
-        // If the class exists, attempt to instantiate and call methods reflectively.
-        // This keeps compile-time independence while enabling RTSP when the library is present.
-        try {
-            // Try to find a constructor that accepts (Context, boolean, Object/Listener, int)
-            val ctor = clazz.constructors.firstOrNull { it.parameterTypes.isNotEmpty() }
-            val instance = if (ctor != null) {
-                // Build a parameter array with sensible defaults:
-                val params = ctor.parameterTypes.map { paramType ->
-                    when {
-                        paramType == java.lang.Boolean.TYPE -> java.lang.Boolean.FALSE
-                        paramType == java.lang.Integer.TYPE -> Integer.valueOf(rtspPort)
-                        paramType == java.lang.Integer::class.java -> Integer.valueOf(rtspPort)
-                        paramType == java.lang.Boolean::class.java -> java.lang.Boolean.FALSE
-                        paramType.isAssignableFrom(Context::class.java) -> this
-                        else -> null
-                    }
-                }.toTypedArray()
-                // Some constructors may not accept nulls for listener param; pass null for unknowns.
-                ctor.newInstance(*params)
-            } else {
-                // fallback: try no-arg constructor
-                clazz.getDeclaredConstructor().newInstance()
-            }
-            rtspServer = instance
+        val audioPrepared = if (audioEnabled) rtspEngine?.configureAudio() == true else false
+        val videoPrepared = rtspEngine?.configureVideo(w, h, fps, 2_500_000, 0, density) == true
 
-            try {
-                val setPort = clazz.getMethod("setPort", Integer.TYPE)
-                setPort.invoke(rtspServer, Integer.valueOf(rtspPort))
-            } catch (_: Exception) {
-                // ignore if method is absent
-            }
+        if (!videoPrepared) {
+            Log.e(TAG, "RTSP prepareVideo failed")
+            stopSelf()
+            return
+        }
 
-            // setVideoBitrateOnFly(int) if available
-            try {
-                val setBitrate = clazz.getMethod("setVideoBitrateOnFly", Integer.TYPE)
-                setBitrate.invoke(rtspServer, Integer.valueOf(2_500_000))
-            } catch (_: NoSuchMethodException) { /* ignore if method not present */ }
+        audioActive = audioEnabled && audioPrepared
+        if (audioEnabled && !audioPrepared) {
+            Log.w(TAG, "RTSP audio was not prepared; continuing with video-only stream")
+        }
 
-            // prepareAudio() and prepareVideo(...)
-            val audioPrepared = if (audioEnabled) try {
-                val m = clazz.getMethod("prepareAudio")
-                (m.invoke(rtspServer) as? Boolean) == true
-            } catch (e: Exception) {
-                Log.w(TAG, "prepareAudio not available or failed", e)
-                false
-            } else false
-
-            val videoPrepared = try {
-                // try common signature: prepareVideo(width, height, fps, bitrate, rotation, density)
-                val m = clazz.getMethod(
-                    "prepareVideo",
-                    Integer.TYPE,
-                    Integer.TYPE,
-                    Integer.TYPE,
-                    Integer.TYPE,
-                    Integer.TYPE,
-                    Integer.TYPE
-                )
-                (m.invoke(rtspServer, w, h, fps, 2_500_000, 0, density) as? Boolean) == true
-            } catch (e: NoSuchMethodException) {
-                // try alternative signature: prepareVideo(width, height, fps, bitrate, rotation)
-                try {
-                    val m2 = clazz.getMethod(
-                        "prepareVideo",
-                        Integer.TYPE,
-                        Integer.TYPE,
-                        Integer.TYPE,
-                        Integer.TYPE,
-                        Integer.TYPE
-                    )
-                    (m2.invoke(rtspServer, w, h, fps, 2_500_000, 0) as? Boolean) == true
-                } catch (ex: Exception) {
-                    Log.w(TAG, "prepareVideo not available or failed", ex)
-                    false
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "prepareVideo invocation failed", e)
-                false
-            }
-
-            if (videoPrepared) {
-                audioActive = audioEnabled && audioPrepared
-                if (audioEnabled && !audioPrepared) {
-                    Log.w(TAG, "RTSP audio was not prepared; continuing with video-only stream")
-                }
-                // Try to call startStream(resultCode, intent) or startStream()
-                try {
-                    val startWithParams = clazz.getMethod("startStream", Integer.TYPE, Intent::class.java)
-                    startWithParams.invoke(rtspServer, code, data)
-                } catch (e: NoSuchMethodException) {
-                    try {
-                        val startNoParams = clazz.getMethod("startStream")
-                        startNoParams.invoke(rtspServer)
-                    } catch (e2: Exception) {
-                        Log.e(TAG, "No suitable startStream method found or invocation failed", e2)
-                        stopSelf()
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start RTSP stream", e)
-                    stopSelf()
-                }
-
-                // Verify server actually entered streaming state when API supports isStreaming().
-                val started = try {
-                    val isStreamingMethod = clazz.getMethod("isStreaming")
-                    (isStreamingMethod.invoke(rtspServer) as? Boolean) == true
-                } catch (_: Exception) {
-                    true
-                }
-
-                if (!started) {
-                    Log.e(TAG, "RTSP stream start was invoked but server is not streaming")
-                    setStreamingState(false)
-                    broadcast(0, false)
-                    stopSelf()
-                }
-            } else {
-                Log.e(TAG, "RTSP prepareVideo failed")
-                stopSelf()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to instantiate or use RTSP server reflectively", e)
+        val started = rtspEngine?.start(code, data) == true
+        if (!started) {
+            Log.e(TAG, "RTSP stream start was invoked but server is not streaming")
+            setStreamingState(false)
+            broadcast(0, false)
             stopSelf()
         }
     }
@@ -475,36 +360,7 @@ class ScreenStreamService : Service() {
         }
 
         httpServer?.stop()
-
-        // If RTSP library is present and we created an instance, try to stop and release it reflectively.
-        rtspServer?.let { server ->
-            try {
-                val clazz = server::class.java
-                try {
-                    val isStreamingMethod = clazz.getMethod("isStreaming")
-                    val streaming = (isStreamingMethod.invoke(server) as? Boolean) == true
-                    if (streaming) {
-                        try {
-                            val stopMethod = clazz.getMethod("stopStream")
-                            stopMethod.invoke(server)
-                        } catch (e: NoSuchMethodException) {
-                            Log.w(TAG, "stopStream method not found", e)
-                        }
-                    }
-                } catch (e: NoSuchMethodException) {
-                    // ignore
-                }
-
-                try {
-                    val releaseMethod = clazz.getMethod("release")
-                    releaseMethod.invoke(server)
-                } catch (e: NoSuchMethodException) {
-                    // ignore
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to stop/release RTSP server reflectively", e)
-            }
-        }
+        rtspEngine?.stop()
 
         handlerThread?.quitSafely()
         executor.shutdownNow()
