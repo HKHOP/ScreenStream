@@ -23,7 +23,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvClients: TextView
     private lateinit var tvHint: TextView
     private lateinit var btnToggle: Button
-    private lateinit var btnSettings: Button // Added Settings Reference
+    private lateinit var btnSettings: Button
     private lateinit var cardStream: View
 
     private lateinit var projectionManager: MediaProjectionManager
@@ -36,154 +36,157 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val projectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            launchService(result.resultCode, result.data!!)
-        } else {
-            showIdle()
+    private val projectionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                startStreamingService(result.resultCode, result.data!!)
+            } else {
+                showIdle()
+            }
         }
-    }
 
-    private val notifPermLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* proceed regardless */ }
+    private val notifPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        tvStatus   = findViewById(R.id.tvStatus)
-        tvUrl      = findViewById(R.id.tvUrl)
-        tvClients  = findViewById(R.id.tvClients)
-        tvHint     = findViewById(R.id.tvHint)
-        btnToggle  = findViewById(R.id.btnToggle)
-        cardStream = findViewById(R.id.cardStream)
-        
-        // Dynamic binding or creation of settings hook
-        btnSettings = Button(this).apply { text = "Settings" } 
-        // Tip: You can place an actual Button with id R.id.btnSettings in your activity_main.xml layout later!
+        bindViews()
 
-        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projectionManager =
+            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         btnToggle.setOnClickListener {
-            if (!isStreaming) startFlow() else stopFlow()
+            if (isStreaming) stopStreaming() else startCaptureFlow()
         }
-        
-        // Handle clicking into Settings
+
         btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
+        requestNotificationPermissionIfNeeded()
     }
 
-    override fun onResume() {
-        super.onResume()
+    private fun bindViews() {
+        tvStatus = findViewById(R.id.tvStatus)
+        tvUrl = findViewById(R.id.tvUrl)
+        tvClients = findViewById(R.id.tvClients)
+        tvHint = findViewById(R.id.tvHint)
+        btnToggle = findViewById(R.id.btnToggle)
+        btnSettings = findViewById(R.id.btnSettings)
+        cardStream = findViewById(R.id.cardStream)
+    }
+
+    override fun onStart() {
+        super.onStart()
         registerReceiver(
             statusReceiver,
             IntentFilter(ScreenStreamService.BROADCAST_STATUS),
             RECEIVER_NOT_EXPORTED
         )
-        // Refresh display addresses if configurations were altered while in settings screen
-        updateDisplayUrl()
     }
 
-    override fun onPause() {
-        super.onPause()
+    override fun onStop() {
+        super.onStop()
         unregisterReceiver(statusReceiver)
     }
 
-    private fun updateDisplayUrl() {
-        val ip = getWifiIpAddress()
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        val useRtsp = prefs.getBoolean("use_rtsp_mode", false)
-        
-        if (useRtsp) {
-            val rtspPort = prefs.getString("rtsp_port", "1935")
-            tvUrl.text = "rtsp://$ip:$rtspPort/"
-        } else {
-            tvUrl.text = "http://$ip:${ScreenStreamService.PORT}"
+    override fun onResume() {
+        super.onResume()
+        updateUrl()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 
-    private fun startFlow() {
+    private fun startCaptureFlow() {
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
-    private fun launchService(resultCode: Int, data: Intent) {
-        val serviceIntent = Intent(this, ScreenStreamService::class.java).apply {
+    private fun startStreamingService(resultCode: Int, data: Intent) {
+        val intent = Intent(this, ScreenStreamService::class.java).apply {
             action = ScreenStreamService.ACTION_START
             putExtra(ScreenStreamService.EXTRA_RESULT_CODE, resultCode)
             putExtra(ScreenStreamService.EXTRA_PROJECTION_DATA, data)
         }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
+            startForegroundService(intent)
         } else {
-            startService(serviceIntent)
+            startService(intent)
         }
+
         showStreaming()
     }
 
-    private fun stopFlow() {
+    private fun stopStreaming() {
         startService(Intent(this, ScreenStreamService::class.java).apply {
             action = ScreenStreamService.ACTION_STOP
         })
+
         showIdle()
     }
 
     private fun showStreaming() {
         isStreaming = true
-        btnToggle.text = "Stop Streaming"
-        btnToggle.setBackgroundColor(getColor(android.R.color.holo_red_dark))
+
+        btnToggle.text = "Stop"
         tvStatus.text = "● LIVE"
-        tvStatus.setTextColor(getColor(android.R.color.holo_green_light))
         cardStream.visibility = View.VISIBLE
-        tvClients.text = "0 viewers"
         tvHint.visibility = View.VISIBLE
-        updateDisplayUrl()
+
+        updateUrl()
     }
 
     private fun showIdle() {
         isStreaming = false
-        btnToggle.text = "Start Streaming"
-        btnToggle.setBackgroundColor(getColor(android.R.color.holo_blue_dark))
+
+        btnToggle.text = "Start"
         tvStatus.text = "● Idle"
-        tvStatus.setTextColor(getColor(android.R.color.darker_gray))
         cardStream.visibility = View.GONE
         tvHint.visibility = View.GONE
-        updateDisplayUrl()
+
+        tvClients.text = "No viewers"
+        updateUrl()
     }
 
     private fun updateClientCount(count: Int) {
-        tvClients.text = if (count == 0) "No viewers connected"
-                         else "$count viewer${if (count > 1) "s" else ""} connected  ✓"
+        tvClients.text =
+            if (count <= 0) "No viewers connected"
+            else "$count viewer${if (count > 1) "s" else ""} connected"
     }
 
-    private fun getWifiIpAddress(): String {
-        try {
-            for (intf in NetworkInterface.getNetworkInterfaces()) {
-                if (!intf.name.startsWith("wlan") && !intf.name.startsWith("eth")) continue
-                for (addr in intf.inetAddresses) {
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        return addr.hostAddress ?: continue
-                    }
-                }
-            }
-            for (intf in NetworkInterface.getNetworkInterfaces()) {
-                for (addr in intf.inetAddresses) {
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        return addr.hostAddress ?: continue
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-        return "127.0.0.1"
+    private fun updateUrl() {
+        val ip = getLocalIp()
+
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val rtsp = prefs.getBoolean("use_rtsp_mode", false)
+
+        tvUrl.text = if (rtsp) {
+            val port = prefs.getString("rtsp_port", "1935")
+            "rtsp://$ip:$port/"
+        } else {
+            "http://$ip:${ScreenStreamService.PORT}"
+        }
+    }
+
+    private fun getLocalIp(): String {
+        return try {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .flatMap { it.inetAddresses.toList() }
+                .firstOrNull {
+                    !it.isLoopbackAddress && it is Inet4Address
+                }?.hostAddress ?: "127.0.0.1"
+        } catch (_: Exception) {
+            "127.0.0.1"
+        }
     }
 }
