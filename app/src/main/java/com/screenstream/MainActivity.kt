@@ -31,11 +31,17 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var projectionManager: MediaProjectionManager
     private var isStreaming = false
+    private var rtspMode = false
+    private var audioRequested = false
+    private var audioActive = false
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val count = intent?.getIntExtra(ScreenStreamService.EXTRA_CLIENT_COUNT, 0) ?: 0
             val streaming = intent?.getBooleanExtra(ScreenStreamService.EXTRA_IS_STREAMING, false) ?: false
+            rtspMode = intent?.getBooleanExtra(ScreenStreamService.EXTRA_RTSP_MODE, false) ?: false
+            audioRequested = intent?.getBooleanExtra(ScreenStreamService.EXTRA_AUDIO_REQUESTED, false) ?: false
+            audioActive = intent?.getBooleanExtra(ScreenStreamService.EXTRA_AUDIO_ACTIVE, false) ?: false
             if (streaming) showStreaming() else showIdle()
             updateClientCount(count)
         }
@@ -144,7 +150,7 @@ class MainActivity : AppCompatActivity() {
         isStreaming = true
 
         btnToggle.text = "Stop"
-        tvStatus.text = "● LIVE"
+        tvStatus.text = if (audioActive) "● LIVE (audio+video)" else "● LIVE (video-only)"
         cardStream.visibility = View.VISIBLE
         tvHint.visibility = View.VISIBLE
 
@@ -174,6 +180,9 @@ class MainActivity : AppCompatActivity() {
 
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         val rtsp = prefs.getBoolean("use_rtsp_mode", false)
+        val audioEnabled = prefs.getBoolean("enable_audio", false)
+        rtspMode = rtsp
+        audioRequested = audioEnabled
 
         tvUrl.text = if (rtsp) {
             val port = prefs.getString("rtsp_port", "1935")
@@ -181,6 +190,16 @@ class MainActivity : AppCompatActivity() {
         } else {
             "http://$ip:${ScreenStreamService.PORT}"
         }
+
+        val modeHint = when {
+            rtsp && audioEnabled -> "Mode: RTSP (audio+video available)"
+            rtsp -> "Mode: RTSP (video-only; audio currently disabled in settings)"
+            else -> "Mode: MJPEG HTTP (video-only). Audio is available only in RTSP mode."
+        }
+        val warning = if (!rtsp && audioEnabled) {
+            "\nAudio is enabled in settings, but MJPEG mode ignores audio."
+        } else ""
+        tvHint.text = "How to watch:\n1. Open VLC on your TV, PC, or phone\n2. Go to Media → Open Network Stream\n3. Paste the URL above and press Play\n\n$modeHint$warning"
     }
 
     private fun syncUiWithServiceState() {
